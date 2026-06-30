@@ -61,33 +61,128 @@ public class ServerHelper {
         i.setAction(Intent.ACTION_DEFAULT);
         return i;
     }
-    public static Display getActiveDisplay(Context context, PreferenceConfiguration prefs) {
-        Display secondary = getSecondaryDisplay(context);
-        if (secondary != null && (prefs.enableFullExDisplay)) {
-            return secondary;
-        } else {
-            return ((DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE)).getDisplay(Display.DEFAULT_DISPLAY);
+    /**
+     * Check if a display is a built-in/internal screen (not an externally connected display).
+     * Uses Display.getType() on API 30+, falls back to flag-based heuristics on older APIs.
+     */
+    private static boolean isBuiltInDisplay(Display display) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            int type = display.getType();
+            return type == Display.TYPE_INTERNAL || type == Display.TYPE_UNKNOWN;
         }
+        // Pre-API 30 heuristic: built-in displays typically have FLAG_PRIVATE or FLAG_SECURE,
+        // while external displays (HDMI, DP) typically don't
+        int flags = display.getFlags();
+        if ((flags & Display.FLAG_PRIVATE) != 0) {
+            return true;
+        }
+        // Check if display name contains the device manufacturer (internal screens often do)
+        String displayName = display.getName();
+        String deviceManufacturer = Build.MANUFACTURER;
+        if (displayName != null && deviceManufacturer != null &&
+            displayName.toLowerCase().contains(deviceManufacturer.toLowerCase())) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if the device has two internal screens (dual-screen handheld like AYN Thor).
+     */
+    private static boolean isDualInternalScreenDevice(DisplayManager displayManager, Display defaultDisplay) {
+        int internalScreenCount = 0;
+        for (Display d : displayManager.getDisplays()) {
+            LimeLog.info("Display " + d.getDisplayId() + ": " + d.getName() +
+                         " " + d.getMode().getPhysicalWidth() + "x" + d.getMode().getPhysicalHeight() +
+                         " flags=" + d.getFlags() + " type=" + (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? d.getType() : "N/A"));
+            if (isBuiltInDisplay(d)) {
+                internalScreenCount++;
+            }
+        }
+        LimeLog.info("Detected " + internalScreenCount + " internal screen(s)");
+        return internalScreenCount >= 2;
+    }
+
+    /**
+     * Return the display with the larger physical area from two candidates.
+     */
+    private static Display getLargerDisplay(Display a, Display b) {
+        int areaA = a.getMode().getPhysicalWidth() * a.getMode().getPhysicalHeight();
+        int areaB = b.getMode().getPhysicalWidth() * b.getMode().getPhysicalHeight();
+        LimeLog.info("Comparing displays: " + a.getDisplayId() + " area=" + areaA +
+                     " vs " + b.getDisplayId() + " area=" + areaB);
+        return (areaA >= areaB) ? a : b;
+    }
+
+    public static Display getActiveDisplay(Context context, PreferenceConfiguration prefs) {
+        DisplayManager displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+        Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
+        Display secondary = getSecondaryDisplay(context);
+
+        if (secondary != null && prefs.enableFullExDisplay) {
+            // Check if both displays are internal (dual-screen device like AYN Thor)
+            if (isBuiltInDisplay(defaultDisplay) && isBuiltInDisplay(secondary)) {
+                // Dual internal screens: use the LARGER one for streaming
+                LimeLog.info("Dual internal screen detected - selecting larger display for streaming");
+                return getLargerDisplay(defaultDisplay, secondary);
+            }
+            // True external display (AR glasses, USB monitor, etc.): use it
+            return secondary;
+        }
+
+        return defaultDisplay;
     }
 
     public static Display getSecondaryDisplay(Context context) {
         DisplayManager displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
-        Display display = null;
         Display[] displays = displayManager.getDisplays();
         int mainDisplayId = Display.DEFAULT_DISPLAY;
-        int secondaryDisplayId = -1;
-        for (Display displayVariant : displays) {
-            LimeLog.info(displayVariant.toString());
-            if (displayVariant.getDisplayId() != mainDisplayId) {
-                secondaryDisplayId = displayVariant.getDisplayId();
-                break;
+        Display defaultDisplay = displayManager.getDisplay(mainDisplayId);
+
+        // Collect non-default displays
+        ArrayList<Display> nonDefaultDisplays = new ArrayList<>();
+        for (Display d : displays) {
+            LimeLog.info(d.toString());
+            if (d.getDisplayId() != mainDisplayId) {
+                nonDefaultDisplays.add(d);
             }
         }
 
-        if (secondaryDisplayId != -1) {
-            display = displayManager.getDisplay(secondaryDisplayId);
+        if (nonDefaultDisplays.isEmpty()) {
+            return null;
         }
-        return display;
+
+        // On dual-internal-screen devices, prefer the larger non-default internal display
+        // as the "secondary" display for dual-screen mode
+        if (isDualInternalScreenDevice(displayManager, defaultDisplay)) {
+            // Return the largest non-default internal display
+            Display best = null;
+            int maxArea = 0;
+            for (Display d : nonDefaultDisplays) {
+                if (isBuiltInDisplay(d)) {
+                    int area = d.getMode().getPhysicalWidth() * d.getMode().getPhysicalHeight();
+                    if (area > maxArea) {
+                        maxArea = area;
+                        best = d;
+                    }
+                }
+            }
+            if (best != null) {
+                LimeLog.info("Dual internal screen: selected secondary display " + best.getDisplayId());
+                return best;
+            }
+        }
+
+        // Prefer truly external displays over secondary internal screens
+        for (Display d : nonDefaultDisplays) {
+            if (!isBuiltInDisplay(d)) {
+                LimeLog.info("External display detected: " + d.getDisplayId());
+                return d;
+            }
+        }
+
+        // Fallback: return the first non-default display
+        return nonDefaultDisplays.get(0);
     }
 
     public static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
@@ -95,9 +190,23 @@ public class ServerHelper {
                                            boolean withVDisplay) {
         Intent gameIntent = null;
         PreferenceConfiguration prefConfig = PreferenceConfiguration.readPreferences(parent);
+        DisplayManager displayManager = (DisplayManager) parent.getSystemService(Context.DISPLAY_SERVICE);
+        Display secondaryDisplay = getSecondaryDisplay(parent);
+        boolean enableFullEx = prefConfig.enableFullExDisplay && secondaryDisplay != null;
+        boolean isDualInternal = enableFullEx && isDualInternalScreenDevice(displayManager,
+            displayManager.getDisplay(Display.DEFAULT_DISPLAY));
+
         // Try to add secondary DisplayContext if supported and connected
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && prefConfig.enableFullExDisplay && getSecondaryDisplay(parent) != null) {
-            Context displayContext = parent.createDisplayContext(getSecondaryDisplay(parent)); // use secondary display
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && enableFullEx) {
+            Context displayContext;
+            if (isDualInternal) {
+                // Dual internal screens: use the larger display for Game context
+                Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
+                Display largerDisplay = getLargerDisplay(defaultDisplay, secondaryDisplay);
+                displayContext = parent.createDisplayContext(largerDisplay);
+            } else {
+                displayContext = parent.createDisplayContext(secondaryDisplay);
+            }
             gameIntent = new Intent(displayContext, Game.class);
             gameIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
@@ -123,9 +232,21 @@ public class ServerHelper {
             e.printStackTrace();
         }
 
-        if (prefConfig.enableFullExDisplay) {
-            Display secondaryDisplay = getSecondaryDisplay(parent);
-            if (secondaryDisplay != null) {
+        if (enableFullEx) {
+            if (isDualInternal) {
+                // Dual internal screens (e.g. AYN Thor): stream on larger display, controls on smaller
+                Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
+                Display largerDisplay = getLargerDisplay(defaultDisplay, secondaryDisplay);
+                Display smallerDisplay = (largerDisplay == defaultDisplay) ? secondaryDisplay : defaultDisplay;
+
+                gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, largerDisplay.getDisplayId());
+                Intent touchpadIntent = new Intent(parent, ExternalDisplayControlActivity.class);
+                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_INTENT, gameIntent);
+                // Signal to doStart() to launch touchpad on the smaller display
+                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, smallerDisplay.getDisplayId());
+                return touchpadIntent;
+            } else {
+                // True external display: original behavior (stream on external, controls on default)
                 int secondaryDisplayId = secondaryDisplay.getDisplayId();
                 gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, secondaryDisplayId);
                 Intent touchpadIntent = new Intent(parent, ExternalDisplayControlActivity.class);
@@ -151,7 +272,16 @@ public class ServerHelper {
         }
 
         Intent intent = createStartIntent(parent, app, computer, managerBinder, withVDisplay);
-        parent.startActivity(intent);
+
+        // For dual internal screen devices, launch the touchpad on the smaller display
+        int launchDisplayId = intent.getIntExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, Display.DEFAULT_DISPLAY);
+        if (launchDisplayId != Display.DEFAULT_DISPLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.app.ActivityOptions options = android.app.ActivityOptions.makeBasic();
+            options.setLaunchDisplayId(launchDisplayId);
+            parent.startActivity(intent, options.toBundle());
+        } else {
+            parent.startActivity(intent);
+        }
     }
 
     public static void doNetworkTest(final Activity parent) {
