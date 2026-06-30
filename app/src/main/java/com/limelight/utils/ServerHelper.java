@@ -63,20 +63,15 @@ public class ServerHelper {
     }
     /**
      * Check if a display is a built-in/internal screen (not an externally connected display).
-     * Uses Display.getType() on API 30+, falls back to flag-based heuristics on older APIs.
+     * Uses flag-based heuristics and manufacturer name matching.
      */
     private static boolean isBuiltInDisplay(Display display) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            int type = display.getType();
-            return type == Display.TYPE_INTERNAL || type == Display.TYPE_UNKNOWN;
-        }
-        // Pre-API 30 heuristic: built-in displays typically have FLAG_PRIVATE or FLAG_SECURE,
-        // while external displays (HDMI, DP) typically don't
         int flags = display.getFlags();
+        // FLAG_PRIVATE indicates the display is internal/private to the system
         if ((flags & Display.FLAG_PRIVATE) != 0) {
             return true;
         }
-        // Check if display name contains the device manufacturer (internal screens often do)
+        // Internal screens often have device manufacturer in their name
         String displayName = display.getName();
         String deviceManufacturer = Build.MANUFACTURER;
         if (displayName != null && deviceManufacturer != null &&
@@ -94,7 +89,7 @@ public class ServerHelper {
         for (Display d : displayManager.getDisplays()) {
             LimeLog.info("Display " + d.getDisplayId() + ": " + d.getName() +
                          " " + d.getMode().getPhysicalWidth() + "x" + d.getMode().getPhysicalHeight() +
-                         " flags=" + d.getFlags() + " type=" + (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? d.getType() : "N/A"));
+                         " flags=" + d.getFlags());
             if (isBuiltInDisplay(d)) {
                 internalScreenCount++;
             }
