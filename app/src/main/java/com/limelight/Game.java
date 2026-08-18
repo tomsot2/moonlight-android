@@ -179,7 +179,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // fullscreen the entire time streaming is active, so (unlike a separate
     // overlay app) there's no "leaving the foreground app" event that could
     // tear the session down.
-    private androidx.window.area.WindowAreaControllerCallbackAdapter windowAreaController;
+    private androidx.window.java.area.WindowAreaControllerCallbackAdapter windowAreaController;
     private androidx.window.area.WindowAreaInfo coverWindowAreaInfo;
     private androidx.window.area.WindowAreaSessionPresenter coverWindowAreaSession;
     private FrameLayout coverScreenFrameLayout;
@@ -1122,7 +1122,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void setupCoverScreenSession() {
         try {
-            windowAreaController = new androidx.window.area.WindowAreaControllerCallbackAdapter(
+            windowAreaController = new androidx.window.java.area.WindowAreaControllerCallbackAdapter(
                     androidx.window.area.WindowAreaController.getOrCreate());
 
             windowAreaController.addWindowAreaInfoListListener(
