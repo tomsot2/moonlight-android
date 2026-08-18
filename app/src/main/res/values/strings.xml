@@ -12,6 +12,7 @@
     <string name="configuration_mode_move_buttons">Move buttons mode</string>
     <string name="configuration_mode_resize_buttons">Resize buttons mode</string>
     <string name="configuration_mode_disable_enable_buttons">Enable/Disable buttons mode</string>
+    <string name="configuration_mode_cover_screen">Cover screen mode — tap a button to move it to/from the cover screen</string>
     <string name="configuration_mode_exiting">Exiting configuration mode</string>
     <string name="help_loading_title">Help Viewer</string>
     <string name="help_loading_msg">Loading help page…</string>

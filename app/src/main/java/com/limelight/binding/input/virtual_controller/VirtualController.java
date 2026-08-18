@@ -13,6 +13,7 @@ import android.os.Vibrator;
 import android.util.DisplayMetrics;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.ViewParent;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.Toast;
@@ -41,7 +42,8 @@ public class VirtualController {
         Active,
         MoveButtons,
         ResizeButtons,
-        DisableEnableButtons
+        DisableEnableButtons,
+        CoverScreenToggle
     }
 
     private static final boolean _PRINT_DEBUG_INFORMATION = false;
@@ -58,6 +60,11 @@ public class VirtualController {
     };
 
     private FrameLayout frame_layout = null;
+
+    /** Second container rendered on the cover-screen area, set by Game when a
+     *  dual-screen session is active. Null whenever no cover screen is shown,
+     *  in which case cover-screen-flagged elements fall back to frame_layout. */
+    private FrameLayout coverFrameLayout = null;
 
     ControllerMode currentMode = ControllerMode.Active;
     ControllerInputContext inputContext = new ControllerInputContext();
@@ -103,6 +110,9 @@ public class VirtualController {
                 } else if (currentMode == ControllerMode.MoveButtons) {
                     currentMode = ControllerMode.ResizeButtons;
                     message = context.getString(R.string.configuration_mode_resize_buttons);
+                } else if (currentMode == ControllerMode.ResizeButtons) {
+                    currentMode = ControllerMode.CoverScreenToggle;
+                    message = context.getString(R.string.configuration_mode_cover_screen);
                 } else {
                     currentMode = ControllerMode.Active;
                     VirtualControllerConfigurationLoader.saveProfile(VirtualController.this, context);
@@ -163,7 +173,10 @@ public class VirtualController {
 
     public void removeElements() {
         for (VirtualControllerElement element : elements) {
-            frame_layout.removeView(element);
+            ViewParent parent = element.getParent();
+            if (parent instanceof FrameLayout) {
+                ((FrameLayout) parent).removeView(element);
+            }
         }
         elements.clear();
 
@@ -183,6 +196,41 @@ public class VirtualController {
         layoutParams.setMargins(x, y, 0, 0);
 
         frame_layout.addView(element, layoutParams);
+    }
+
+    /**
+     * Sets (or clears, with null) the container rendered on the cover-screen
+     * area. Called by Game when a WindowAreaController dual-screen session
+     * starts or ends. Immediately re-parents any coverScreen-flagged elements
+     * accordingly.
+     */
+    public void setCoverFrameLayout(FrameLayout coverFrameLayout) {
+        this.coverFrameLayout = coverFrameLayout;
+        refreshCoverScreenPlacement();
+    }
+
+    /**
+     * Ensures every element lives in the correct container: coverFrameLayout
+     * if it's flagged coverScreen AND a cover screen is currently available,
+     * otherwise the main frame_layout. Re-parenting a View preserves its
+     * LayoutParams values (position/size), though the LayoutParams *class*
+     * must match the new parent, which is fine here since both containers
+     * are FrameLayouts.
+     */
+    public void refreshCoverScreenPlacement() {
+        for (VirtualControllerElement element : elements) {
+            FrameLayout targetParent =
+                    (element.coverScreen && coverFrameLayout != null) ? coverFrameLayout : frame_layout;
+
+            ViewParent currentParent = element.getParent();
+            if (currentParent != targetParent) {
+                FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) element.getLayoutParams();
+                if (currentParent instanceof FrameLayout) {
+                    ((FrameLayout) currentParent).removeView(element);
+                }
+                targetParent.addView(element, layoutParams);
+            }
+        }
     }
 
     public List<VirtualControllerElement> getElements() {
