@@ -183,6 +183,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private androidx.window.area.WindowAreaInfo coverWindowAreaInfo;
     private androidx.window.area.WindowAreaSessionPresenter coverWindowAreaSession;
     private FrameLayout coverScreenFrameLayout;
+    private boolean loggedCoverScreenCapability = false;
 
     private KeyBoardController keyBoardController;
 
@@ -1136,6 +1137,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             }
                         }
                         coverWindowAreaInfo = rearInfo;
+
+                        if (!loggedCoverScreenCapability) {
+                            loggedCoverScreenCapability = true;
+                            String statusText;
+                            if (rearInfo == null) {
+                                statusText = "No TYPE_REAR_FACING area found (total areas: " + windowAreaInfos.size() + ")";
+                            } else {
+                                androidx.window.area.WindowAreaCapability cap = rearInfo.getCapability(
+                                        androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
+                                statusText = "Rear area found. Capability status: " + (cap != null ? cap.getStatus() : "null capability");
+                            }
+                            LimeLog.info("Cover-screen capability check: " + statusText);
+                            runOnUiThread(() -> Toast.makeText(Game.this, "Cover screen: " + statusText, Toast.LENGTH_LONG).show());
+                        }
 
                         if (rearInfo != null && coverWindowAreaSession == null) {
                             androidx.window.area.WindowAreaCapability capability = rearInfo.getCapability(
