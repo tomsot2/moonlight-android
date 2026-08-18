@@ -29,11 +29,11 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build debug APK (nonRoot_game, arm64-v8a only)
-        run: ./gradlew assembleNonRoot_gameDebug -Pandroid.injected.build.abi=arm64-v8a
+      - name: Build debug APK (nonRoot_game flavor only)
+        run: ./gradlew assembleNonRoot_gameDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Artemis-debug-arm64
-          path: app/build/outputs/apk/nonRoot_game/debug/*.apk
+          name: Artemis-debug
+          path: app/build/outputs/apk/**/*.apk
