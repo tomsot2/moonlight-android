@@ -209,6 +209,12 @@ public class VirtualController {
         refreshCoverScreenPlacement();
     }
 
+    /** True once Game has handed us a live cover-screen container (i.e. the
+     *  WindowAreaController dual-screen session actually started). */
+    public boolean hasCoverFrameLayout() {
+        return coverFrameLayout != null;
+    }
+
     /**
      * Ensures every element lives in the correct container: coverFrameLayout
      * if it's flagged coverScreen AND a cover screen is currently available,

@@ -112,8 +112,14 @@ public abstract class VirtualControllerElement extends View {
 
     protected void actionToggleCoverScreen() {
         coverScreen = !coverScreen;
+        invalidate();
         if (virtualController != null) {
             virtualController.refreshCoverScreenPlacement();
+            String status = coverScreen ? "ON" : "OFF";
+            if (coverScreen && !virtualController.hasCoverFrameLayout()) {
+                status += " (no cover screen session active — button stays on main screen)";
+            }
+            android.widget.Toast.makeText(getContext(), "Cover screen: " + status, android.widget.Toast.LENGTH_SHORT).show();
         }
     }
 
