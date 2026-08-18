@@ -183,7 +183,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private androidx.window.area.WindowAreaInfo coverWindowAreaInfo;
     private androidx.window.area.WindowAreaSessionPresenter coverWindowAreaSession;
     private FrameLayout coverScreenFrameLayout;
-    private boolean loggedCoverScreenCapability = false;
+    private boolean coverScreenActivityResumed = false;
 
     private KeyBoardController keyBoardController;
 
@@ -1136,36 +1136,36 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                 break;
                             }
                         }
+                        // Only track info here — the actual presentContentOnWindowArea
+                        // call happens from maybeStartCoverScreenSession(), called from
+                        // onResume(). This matches how CoverPad actually worked:
+                        // presentContentOnWindowArea was only ever called from a button's
+                        // onClick, well after the Activity was RESUMED. This listener can
+                        // fire during onCreate, before the window has focus — calling
+                        // presentContentOnWindowArea directly from here (as the previous
+                        // version did) is the likely reason the session never started.
                         coverWindowAreaInfo = rearInfo;
-
-                        if (!loggedCoverScreenCapability) {
-                            loggedCoverScreenCapability = true;
-                            String statusText;
-                            if (rearInfo == null) {
-                                statusText = "No TYPE_REAR_FACING area found (total areas: " + windowAreaInfos.size() + ")";
-                            } else {
-                                androidx.window.area.WindowAreaCapability cap = rearInfo.getCapability(
-                                        androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
-                                statusText = "Rear area found. Capability status: " + (cap != null ? cap.getStatus() : "null capability");
-                            }
-                            LimeLog.info("Cover-screen capability check: " + statusText);
-                            runOnUiThread(() -> Toast.makeText(Game.this, "Cover screen: " + statusText, Toast.LENGTH_LONG).show());
-                        }
-
-                        if (rearInfo != null && coverWindowAreaSession == null) {
-                            androidx.window.area.WindowAreaCapability capability = rearInfo.getCapability(
-                                    androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
-                            if (capability != null && capability.getStatus() ==
-                                    androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
-                                startCoverScreenSession();
-                            }
-                        }
+                        maybeStartCoverScreenSession();
                     });
         } catch (Throwable t) {
-            // WindowAreaController is unavailable on this device/OS version —
-            // fail quietly and just don't offer cover-screen placement.
-            LimeLog.warning("Cover-screen dual-display setup unavailable: " + t.getMessage());
+            LimeLog.warning("Cover-screen dual-display setup unavailable: " + t);
         }
+    }
+
+    /** Only actually attempts to start a session once the Activity is resumed
+     *  — call from both onResume() and the info listener, since either one
+     *  might arrive first depending on timing. */
+    private void maybeStartCoverScreenSession() {
+        if (!coverScreenActivityResumed) return;
+        if (coverWindowAreaInfo == null || windowAreaController == null || coverWindowAreaSession != null) return;
+
+        androidx.window.area.WindowAreaCapability capability = coverWindowAreaInfo.getCapability(
+                androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
+        if (capability == null || capability.getStatus() !=
+                androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
+            return;
+        }
+        startCoverScreenSession();
     }
 
     private void startCoverScreenSession() {
@@ -1226,6 +1226,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
             coverWindowAreaSession = null;
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        coverScreenActivityResumed = true;
+        maybeStartCoverScreenSession();
     }
 
     private void initkeyBoardLayoutController(){
