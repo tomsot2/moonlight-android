@@ -183,7 +183,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private androidx.window.area.WindowAreaInfo coverWindowAreaInfo;
     private androidx.window.area.WindowAreaSessionPresenter coverWindowAreaSession;
     private FrameLayout coverScreenFrameLayout;
-    private boolean coverScreenActivityResumed = false;
 
     private KeyBoardController keyBoardController;
 
@@ -1136,40 +1135,31 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                 break;
                             }
                         }
-                        // Only track info here — the actual presentContentOnWindowArea
-                        // call happens from maybeStartCoverScreenSession(), called from
-                        // onResume(). This matches how CoverPad actually worked:
-                        // presentContentOnWindowArea was only ever called from a button's
-                        // onClick, well after the Activity was RESUMED. This listener can
-                        // fire during onCreate, before the window has focus — calling
-                        // presentContentOnWindowArea directly from here (as the previous
-                        // version did) is the likely reason the session never started.
+                        // Passive tracking only. The actual presentContentOnWindowArea
+                        // call happens exclusively from requestCoverScreenSessionStart(),
+                        // invoked directly from a real user tap (see
+                        // VirtualControllerElement.actionToggleCoverScreen), matching
+                        // CoverPad's proven-working design.
                         coverWindowAreaInfo = rearInfo;
-                        maybeStartCoverScreenSession();
                     });
         } catch (Throwable t) {
             LimeLog.warning("Cover-screen dual-display setup unavailable: " + t);
         }
     }
 
-    /** Only actually attempts to start a session once the Activity is resumed
-     *  — call from both onResume() and the info listener, since either one
-     *  might arrive first depending on timing. */
-    private void maybeStartCoverScreenSession() {
-        if (!coverScreenActivityResumed) return;
-        if (coverWindowAreaInfo == null || windowAreaController == null || coverWindowAreaSession != null) return;
-
-        androidx.window.area.WindowAreaCapability capability = coverWindowAreaInfo.getCapability(
-                androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
-        if (capability == null || capability.getStatus() !=
-                androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
+    /** Called directly from a real user tap (via VirtualController). Public
+     *  because VirtualController lives in a different package. */
+    public void requestCoverScreenSessionStart() {
+        if (coverWindowAreaInfo == null || windowAreaController == null || coverWindowAreaSession != null) {
             return;
         }
-        startCoverScreenSession();
-    }
+        androidx.window.area.WindowAreaCapability capability = coverWindowAreaInfo.getCapability(
+                androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
+        String statusText = "Capability status: " + (capability != null ? capability.getStatus() : "null");
+        Toast.makeText(this, "Cover screen: " + statusText, Toast.LENGTH_LONG).show();
 
-    private void startCoverScreenSession() {
-        if (coverWindowAreaInfo == null || windowAreaController == null || coverWindowAreaSession != null) {
+        if (capability == null || capability.getStatus() !=
+                androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
             return;
         }
         try {
@@ -1180,6 +1170,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     this);
         } catch (Throwable t) {
             LimeLog.warning("Failed to start cover-screen session: " + t.getMessage());
+            Toast.makeText(this, "Cover-screen start FAILED: " + t, Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1226,13 +1217,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
             coverWindowAreaSession = null;
         }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        coverScreenActivityResumed = true;
-        maybeStartCoverScreenSession();
     }
 
     private void initkeyBoardLayoutController(){

@@ -215,6 +215,16 @@ public class VirtualController {
         return coverFrameLayout != null;
     }
 
+    /** Asks Game to start the dual-screen session, called directly from a real
+     *  user tap (see VirtualControllerElement.actionToggleCoverScreen). This
+     *  mirrors CoverPad's working design, where presentContentOnWindowArea
+     *  was only ever invoked from a button's onClick handler. */
+    public void requestCoverScreenSessionStart() {
+        if (context instanceof com.limelight.Game) {
+            ((com.limelight.Game) context).requestCoverScreenSessionStart();
+        }
+    }
+
     /**
      * Ensures every element lives in the correct container: coverFrameLayout
      * if it's flagged coverScreen AND a cover screen is currently available,

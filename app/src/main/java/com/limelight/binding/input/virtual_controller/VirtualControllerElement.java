@@ -114,6 +114,12 @@ public abstract class VirtualControllerElement extends View {
         coverScreen = !coverScreen;
         invalidate();
         if (virtualController != null) {
+            // Request the session start directly from this real user tap —
+            // matching CoverPad's proven-working design where
+            // presentContentOnWindowArea was only ever called from a button's
+            // onClick, not automatically from a background listener/lifecycle
+            // callback. If a session is already active this is a no-op.
+            virtualController.requestCoverScreenSessionStart();
             virtualController.refreshCoverScreenPlacement();
             String status = coverScreen ? "ON" : "OFF";
             if (coverScreen && !virtualController.hasCoverFrameLayout()) {
