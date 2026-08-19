@@ -1184,6 +1184,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (virtualController != null) {
             virtualController.setCoverFrameLayout(coverScreenFrameLayout);
         }
+
+        // This is the authoritative "it actually worked" signal — equivalent
+        // to CoverPad's confirmed-working "Cover triggers active" toast.
+        Toast.makeText(this, "✓ Cover-screen session STARTED", Toast.LENGTH_LONG).show();
     }
 
     @Override
@@ -1197,15 +1201,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             virtualController.setCoverFrameLayout(null);
         }
 
-        if (t != null) {
-            LimeLog.warning("Cover-screen session ended with error: " + t.getMessage());
-        }
+        LimeLog.warning("Cover-screen session ended. error=" + t);
+        Toast.makeText(this, "✗ Cover-screen session ENDED" + (t != null ? (": " + t) : " (no error — system/OS closed it)"), Toast.LENGTH_LONG).show();
     }
 
     @Override
     public void onContainerVisibilityChanged(boolean isVisible) {
-        // No action needed — buttons stay live regardless of container
-        // visibility state; this is purely informational.
+        Toast.makeText(this, "Cover-screen container visible=" + isVisible, Toast.LENGTH_SHORT).show();
     }
 
     private void teardownCoverScreenSession() {
