@@ -16,6 +16,8 @@ import android.content.pm.PackageManager;
 import android.content.SharedPreferences;
 import android.hardware.display.DisplayManager;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.os.Build;
@@ -26,7 +28,7 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.SurfaceControl;
+import android.view.PixelCopy;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -41,7 +43,6 @@ import android.widget.Toast;
 
 import androidx.annotation.ChecksSdkIntAtLeast;
 import androidx.annotation.NonNull;
-import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -86,9 +87,13 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private static final String PREF_MIRROR_CROP_TOP = "mirror_crop_top_px";
     private static final String PREF_MIRROR_CROP_HEIGHT = "mirror_crop_height_px";
 
+    private static final int MIRROR_FRAME_INTERVAL_MS = 33; // ~30fps
+
     private SurfaceView mirrorSurfaceView;
-    private SurfaceControl mirroredSourceSurfaceControl;
+    private Bitmap mirrorBitmap;
     private boolean mirrorSurfaceReady = false;
+    private boolean mirrorLoopRunning = false;
+    private final Runnable mirrorFrameRunnable = this::captureMirrorFrame;
 
     private boolean isKeyboardVisible = false;
 
@@ -261,7 +266,11 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        releaseMirroredSurface();
+        stopMirrorLoop();
+        if (mirrorBitmap != null) {
+            mirrorBitmap.recycle();
+            mirrorBitmap = null;
+        }
         instance = null;
     }
 
@@ -551,35 +560,33 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
 
     // --- Mirror Mode ---
     // Instead of touch controls, shows a cropped/scaled live region of the primary
-    // stream's video via SurfaceControl mirroring (e.g. a WoW UI strip cropped from
-    // the bottom of a taller-than-normal stream). Swappable with touch-controls mode.
+    // stream's video (e.g. a WoW UI strip cropped from the bottom of a
+    // taller-than-normal stream), redrawn via periodic PixelCopy capture of the
+    // primary stream's SurfaceView. Swappable with touch-controls mode.
 
     private final SurfaceHolder.Callback mirrorSurfaceCallback = new SurfaceHolder.Callback() {
         @Override
         public void surfaceCreated(@NonNull SurfaceHolder holder) {
             mirrorSurfaceReady = true;
-            if (controlMode == ControlMode.MIRROR && isMirrorModeSupported()) {
-                applyMirrorSurface();
+            if (controlMode == ControlMode.MIRROR) {
+                startMirrorLoop();
             }
         }
 
         @Override
         public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
-            if (controlMode == ControlMode.MIRROR && isMirrorModeSupported()) {
-                applyMirrorSurface();
-            }
         }
 
         @Override
         public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
             mirrorSurfaceReady = false;
-            releaseMirroredSurface();
+            stopMirrorLoop();
         }
     };
 
-    @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.O)
     private boolean isMirrorModeSupported() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE;
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
     }
 
     private void toggleControlMode() {
@@ -598,38 +605,40 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             mirrorToggleButton.setAlpha(mirror ? 1.0f : 0.5f);
         }
         if (mirror) {
-            if (mirrorSurfaceReady && isMirrorModeSupported()) {
-                applyMirrorSurface();
+            if (mirrorSurfaceReady) {
+                startMirrorLoop();
             }
         } else {
-            releaseMirroredSurface();
+            stopMirrorLoop();
         }
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private void applyMirrorSurface() {
-        if (Game.instance == null || !mirrorSurfaceReady) {
+    private void startMirrorLoop() {
+        if (mirrorLoopRunning || !isMirrorModeSupported()) {
             return;
         }
-        SurfaceView sourceView = Game.instance.getStreamSurfaceView();
-        if (sourceView == null) {
+        mirrorLoopRunning = true;
+        captureMirrorFrame();
+    }
+
+    private void stopMirrorLoop() {
+        mirrorLoopRunning = false;
+        handler.removeCallbacks(mirrorFrameRunnable);
+    }
+
+    @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.O)
+    private void captureMirrorFrame() {
+        if (!mirrorLoopRunning || controlMode != ControlMode.MIRROR || !mirrorSurfaceReady) {
             return;
         }
+        SurfaceView sourceView = Game.instance != null ? Game.instance.getStreamSurfaceView() : null;
+        int destWidth = mirrorSurfaceView.getWidth();
+        int destHeight = mirrorSurfaceView.getHeight();
+        int sourceWidth = prefConfig != null ? prefConfig.width : 0;
+        int sourceHeight = prefConfig != null ? prefConfig.height : 0;
 
-        SurfaceControl sourceSurfaceControl = sourceView.getSurfaceControl();
-        SurfaceControl destSurfaceControl = mirrorSurfaceView.getSurfaceControl();
-        if (sourceSurfaceControl == null || !sourceSurfaceControl.isValid()
-                || destSurfaceControl == null || !destSurfaceControl.isValid()) {
-            return;
-        }
-
-        if (mirroredSourceSurfaceControl == null) {
-            mirroredSourceSurfaceControl = SurfaceControl.mirrorSurface(sourceSurfaceControl);
-        }
-
-        int sourceWidth = prefConfig.width;
-        int sourceHeight = prefConfig.height;
-        if (sourceWidth <= 0 || sourceHeight <= 0) {
+        if (sourceView == null || destWidth <= 0 || destHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0) {
+            handler.postDelayed(mirrorFrameRunnable, MIRROR_FRAME_INTERVAL_MS);
             return;
         }
 
@@ -637,31 +646,43 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         int cropHeight = clamp(getMirrorCropHeight(sourceHeight, cropTop), 1, sourceHeight - cropTop);
         Rect crop = new Rect(0, cropTop, sourceWidth, cropTop + cropHeight);
 
-        int destWidth = mirrorSurfaceView.getWidth();
-        int destHeight = mirrorSurfaceView.getHeight();
-        if (destWidth <= 0 || destHeight <= 0) {
-            return;
+        if (mirrorBitmap == null || mirrorBitmap.getWidth() != destWidth || mirrorBitmap.getHeight() != destHeight) {
+            if (mirrorBitmap != null) {
+                mirrorBitmap.recycle();
+            }
+            mirrorBitmap = Bitmap.createBitmap(destWidth, destHeight, Bitmap.Config.ARGB_8888);
         }
 
-        float scaleX = destWidth / (float) sourceWidth;
-        float scaleY = destHeight / (float) cropHeight;
-
-        new SurfaceControl.Transaction()
-                .reparent(mirroredSourceSurfaceControl, destSurfaceControl)
-                .setCrop(mirroredSourceSurfaceControl, crop)
-                .setPosition(mirroredSourceSurfaceControl, 0, 0)
-                .setScale(mirroredSourceSurfaceControl, scaleX, scaleY)
-                .setVisibility(mirroredSourceSurfaceControl, true)
-                .apply();
+        try {
+            PixelCopy.request(sourceView, crop, mirrorBitmap, result -> {
+                if (result == PixelCopy.SUCCESS) {
+                    drawMirrorBitmap();
+                }
+                if (mirrorLoopRunning) {
+                    handler.postDelayed(mirrorFrameRunnable, MIRROR_FRAME_INTERVAL_MS);
+                }
+            }, handler);
+        } catch (IllegalArgumentException e) {
+            // Source surface not attached/ready yet; retry next tick.
+            handler.postDelayed(mirrorFrameRunnable, MIRROR_FRAME_INTERVAL_MS);
+        }
     }
 
-    private void releaseMirroredSurface() {
-        if (mirroredSourceSurfaceControl != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            new SurfaceControl.Transaction()
-                    .reparent(mirroredSourceSurfaceControl, null)
-                    .apply();
-            mirroredSourceSurfaceControl.release();
-            mirroredSourceSurfaceControl = null;
+    private void drawMirrorBitmap() {
+        if (mirrorBitmap == null || !mirrorSurfaceReady) {
+            return;
+        }
+        SurfaceHolder holder = mirrorSurfaceView.getHolder();
+        Canvas canvas = null;
+        try {
+            canvas = holder.lockCanvas();
+            if (canvas != null) {
+                canvas.drawBitmap(mirrorBitmap, 0, 0, null);
+            }
+        } finally {
+            if (canvas != null) {
+                holder.unlockCanvasAndPost(canvas);
+            }
         }
     }
 
@@ -722,10 +743,9 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> {
                     int top = parseIntOrDefault(topInput.getText().toString(), currentTop);
                     int height = parseIntOrDefault(heightInput.getText().toString(), currentHeight);
+                    // The capture loop re-reads crop prefs every frame, so no
+                    // explicit re-apply is needed here.
                     saveMirrorCrop(top, height);
-                    if (controlMode == ControlMode.MIRROR && isMirrorModeSupported()) {
-                        applyMirrorSurface();
-                    }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
