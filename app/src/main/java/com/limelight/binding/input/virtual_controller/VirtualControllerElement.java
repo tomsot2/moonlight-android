@@ -60,11 +60,6 @@ public abstract class VirtualControllerElement extends View {
 
     public boolean enabled = true;
 
-    /** True if this element should render on the cover-screen area instead of
-     *  the main streaming display. Toggled via ControllerMode.CoverScreenToggle;
-     *  the actual re-parenting between layouts happens in VirtualController. */
-    public boolean coverScreen = false;
-
     private enum Mode {
         Normal,
         Resize,
@@ -108,19 +103,6 @@ public abstract class VirtualControllerElement extends View {
 
     protected  void actionDisableEnableButton(){
         enabled = !enabled;
-    }
-
-    protected void actionToggleCoverScreen() {
-        coverScreen = !coverScreen;
-        invalidate();
-        if (virtualController != null) {
-            virtualController.refreshCoverScreenPlacement();
-            String status = coverScreen ? "ON" : "OFF";
-            if (coverScreen && !virtualController.hasCoverFrameLayout()) {
-                status += " (no cover screen session active — button stays on main screen)";
-            }
-            android.widget.Toast.makeText(getContext(), "Cover screen: " + status, android.widget.Toast.LENGTH_SHORT).show();
-        }
     }
 
     @Override
@@ -192,8 +174,6 @@ public abstract class VirtualControllerElement extends View {
             return configResizeColor;
         else if (virtualController.getControllerMode() == VirtualController.ControllerMode.DisableEnableButtons)
             return enabled ? configSelectedColor: configDisabledColor;
-        else if (virtualController.getControllerMode() == VirtualController.ControllerMode.CoverScreenToggle)
-            return coverScreen ? configSelectedColor : configDisabledColor;
         else return normalColor;
     }
 
@@ -281,8 +261,6 @@ public abstract class VirtualControllerElement extends View {
                     actionEnableResize();
                 else if (virtualController.getControllerMode() == VirtualController.ControllerMode.DisableEnableButtons)
                     actionDisableEnableButton();
-                else if (virtualController.getControllerMode() == VirtualController.ControllerMode.CoverScreenToggle)
-                    actionToggleCoverScreen();
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
@@ -365,7 +343,6 @@ public abstract class VirtualControllerElement extends View {
         configuration.put("WIDTH", layoutParams.width);
         configuration.put("HEIGHT", layoutParams.height);
         configuration.put("ENABLED", enabled);
-        configuration.put("COVER_SCREEN", coverScreen);
         return configuration;
     }
 
@@ -377,8 +354,6 @@ public abstract class VirtualControllerElement extends View {
         layoutParams.width = configuration.getInt("WIDTH");
         layoutParams.height = configuration.getInt("HEIGHT");
         enabled = configuration.getBoolean("ENABLED");
-        // optBoolean: absent in configs saved before this field existed
-        coverScreen = configuration.optBoolean("COVER_SCREEN", false);
         setVisibility(enabled ? VISIBLE: GONE);
         requestLayout();
     }

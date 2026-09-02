@@ -140,8 +140,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener, EvdevListener,
         OnSystemUiVisibilityChangeListener, GameGestures, StreamContainer.InputCallbacks,
         ExternalControllerView.InputCallbacks,
-        PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener,
-        androidx.window.area.WindowAreaPresentationSessionCallback {
+        PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
     public static Game instance;
 
     private int lastButtonState = 0;
@@ -172,17 +171,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
     private VirtualController virtualController;
-
-    // ── Cover-screen support: renders any VirtualControllerElement flagged
-    // coverScreen=true on the device's rear/cover display area, via the
-    // Jetpack WindowAreaController dual-screen API. This Activity stays
-    // fullscreen the entire time streaming is active, so (unlike a separate
-    // overlay app) there's no "leaving the foreground app" event that could
-    // tear the session down.
-    private androidx.window.java.area.WindowAreaControllerCallbackAdapter windowAreaController;
-    private androidx.window.area.WindowAreaInfo coverWindowAreaInfo;
-    private androidx.window.area.WindowAreaSessionPresenter coverWindowAreaSession;
-    private FrameLayout coverScreenFrameLayout;
 
     private KeyBoardController keyBoardController;
 
@@ -869,8 +857,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             initKeyboardController();
         }
 
-        setupCoverScreenSession();
-
         if (!decoderRenderer.isAvcSupported()) {
             if (spinner != null) {
                 spinner.dismiss();
@@ -1124,101 +1110,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         virtualController = new VirtualController(controllerHandler, (FrameLayout)rootView, this);
         virtualController.refreshLayout();
         virtualController.show();
-    }
-
-    // ── Cover-screen dual-display session ─────────────────────────────────────
-
-    private void setupCoverScreenSession() {
-        try {
-            windowAreaController = new androidx.window.java.area.WindowAreaControllerCallbackAdapter(
-                    androidx.window.area.WindowAreaController.getOrCreate());
-
-            windowAreaController.addWindowAreaInfoListListener(
-                    androidx.core.content.ContextCompat.getMainExecutor(this),
-                    windowAreaInfos -> {
-                        androidx.window.area.WindowAreaInfo rearInfo = null;
-                        for (androidx.window.area.WindowAreaInfo info : windowAreaInfos) {
-                            if (info.getType() == androidx.window.area.WindowAreaInfo.Type.TYPE_REAR_FACING) {
-                                rearInfo = info;
-                                break;
-                            }
-                        }
-                        coverWindowAreaInfo = rearInfo;
-
-                        if (rearInfo != null && coverWindowAreaSession == null) {
-                            androidx.window.area.WindowAreaCapability capability = rearInfo.getCapability(
-                                    androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
-                            if (capability != null && capability.getStatus() ==
-                                    androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
-                                startCoverScreenSession();
-                            }
-                        }
-                    });
-        } catch (Throwable t) {
-            // WindowAreaController is unavailable on this device/OS version —
-            // fail quietly and just don't offer cover-screen placement.
-            LimeLog.warning("Cover-screen dual-display setup unavailable: " + t.getMessage());
-        }
-    }
-
-    private void startCoverScreenSession() {
-        if (coverWindowAreaInfo == null || windowAreaController == null || coverWindowAreaSession != null) {
-            return;
-        }
-        try {
-            windowAreaController.presentContentOnWindowArea(
-                    coverWindowAreaInfo.getToken(),
-                    this,
-                    androidx.core.content.ContextCompat.getMainExecutor(this),
-                    this);
-        } catch (Throwable t) {
-            LimeLog.warning("Failed to start cover-screen session: " + t.getMessage());
-        }
-    }
-
-    @Override
-    public void onSessionStarted(@NonNull androidx.window.area.WindowAreaSessionPresenter session) {
-        coverWindowAreaSession = session;
-
-        coverScreenFrameLayout = new FrameLayout(session.getContext());
-        session.setContentView(coverScreenFrameLayout);
-
-        if (virtualController != null) {
-            virtualController.setCoverFrameLayout(coverScreenFrameLayout);
-        }
-    }
-
-    @Override
-    public void onSessionEnded(Throwable t) {
-        coverWindowAreaSession = null;
-        coverScreenFrameLayout = null;
-
-        if (virtualController != null) {
-            // Falls any cover-screen-flagged buttons back onto the main
-            // on-screen controller so input isn't lost if the session drops.
-            virtualController.setCoverFrameLayout(null);
-        }
-
-        if (t != null) {
-            LimeLog.warning("Cover-screen session ended with error: " + t.getMessage());
-        }
-    }
-
-    @Override
-    public void onContainerVisibilityChanged(boolean isVisible) {
-        // No action needed — buttons stay live regardless of container
-        // visibility state; this is purely informational.
-    }
-
-    private void teardownCoverScreenSession() {
-        if (coverWindowAreaSession != null) {
-            try {
-                coverWindowAreaSession.close();
-            } catch (Throwable t) {
-                LimeLog.warning("Error closing cover-screen session: " + t.getMessage());
-            }
-            coverWindowAreaSession = null;
-        }
     }
 
     private void initkeyBoardLayoutController(){
@@ -1821,8 +1712,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         instance = null;
         timerHandler.removeCallbacksAndMessages(null);
-
-        teardownCoverScreenSession();
 
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
 
