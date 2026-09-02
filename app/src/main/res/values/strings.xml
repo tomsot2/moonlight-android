@@ -641,6 +641,10 @@
     <string name="permission_denied">Notification permission denied</string>
     <string name="no_external_display">No external display detected</string>
     <string name="no_game_instance">No game instance available</string>
+    <string name="mirror_mode_unsupported">Mirror mode requires Android 14 or later</string>
+    <string name="mirror_crop_settings_title">Mirror Crop Region</string>
+    <string name="mirror_crop_top_label">Crop top (source px)</string>
+    <string name="mirror_crop_height_label">Crop height (source px)</string>
     <string name="get_clipboard_failed">Failed to get clipboard: </string>
     <string name="send_clipboard_success">Clipboard sent successfully</string>
     <string name="get_clipboard_success">Clipboard get successfully</string>

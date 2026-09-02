@@ -221,6 +221,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
+    /**
+     * Exposes the primary stream's SurfaceView so other displays (e.g. a secondary
+     * internal screen on dual-screen devices) can mirror it via SurfaceControl.
+     */
+    public SurfaceView getStreamSurfaceView() {
+        return streamContainer != null ? streamContainer.getSurfaceView() : null;
+    }
+
     private boolean pendingDrag = false;
     private boolean isDragging = false;
     private float lastTouchDownX, lastTouchDownY;

@@ -13,9 +13,11 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.hardware.display.DisplayManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -24,16 +26,23 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.SurfaceControl;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
+import androidx.annotation.ChecksSdkIntAtLeast;
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
@@ -67,7 +76,19 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
 
     private ExternalControllerView rootLayout;
     private ImageButton zoomButton;
+    private ImageButton mirrorToggleButton;
     private KeyBoardLayoutController keyBoardLayoutController;
+
+    private enum ControlMode { TOUCH, MIRROR }
+    private ControlMode controlMode = ControlMode.TOUCH;
+
+    private static final String MIRROR_PREFS_NAME = "mirror_mode_prefs";
+    private static final String PREF_MIRROR_CROP_TOP = "mirror_crop_top_px";
+    private static final String PREF_MIRROR_CROP_HEIGHT = "mirror_crop_height_px";
+
+    private SurfaceView mirrorSurfaceView;
+    private SurfaceControl mirroredSourceSurfaceControl;
+    private boolean mirrorSurfaceReady = false;
 
     private boolean isKeyboardVisible = false;
 
@@ -209,6 +230,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private void initTouchEventHandling() {
         // Intercept touch events on root layout
         rootLayout.setOnTouchListener((v, event) -> {
+            if (controlMode == ControlMode.MIRROR) {
+                // Mirror mode is a passive preview; don't forward synthetic touchpad input.
+                return false;
+            }
             handleUserActivity();
             if (Game.instance != null) {
                 Game.instance.handleMotionEvent(v, event);
@@ -236,6 +261,7 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        releaseMirroredSurface();
         instance = null;
     }
 
@@ -421,6 +447,15 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
 
         setContentView(rootLayout);
 
+        // Mirror preview surface, hidden behind the touch controls until mirror mode is toggled on.
+        mirrorSurfaceView = new SurfaceView(this);
+        mirrorSurfaceView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        mirrorSurfaceView.setVisibility(View.GONE);
+        mirrorSurfaceView.getHolder().addCallback(mirrorSurfaceCallback);
+        rootLayout.addView(mirrorSurfaceView);
+
         // Top-left buttons
         LinearLayout topLeftButtons = createButtonContainer(Gravity.TOP | Gravity.START);
         topLeftButtons.setFocusable(false);
@@ -432,6 +467,15 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             zoomButton.setAlpha(0.5f);
         }
         topLeftButtons.addView(zoomButton);
+        if (isMirrorModeSupported()) {
+            mirrorToggleButton = createImageButton(R.drawable.ic_mirror_toggle, v -> toggleControlMode());
+            mirrorToggleButton.setAlpha(0.5f);
+            mirrorToggleButton.setOnLongClickListener(v -> {
+                showMirrorCropSettingsDialog();
+                return true;
+            });
+            topLeftButtons.addView(mirrorToggleButton);
+        }
         rootLayout.addView(topLeftButtons);
 
         // Top-center buttons
@@ -502,6 +546,196 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
                     zoomButton.setAlpha(0.5f);
                 }
             }
+        }
+    }
+
+    // --- Mirror Mode ---
+    // Instead of touch controls, shows a cropped/scaled live region of the primary
+    // stream's video via SurfaceControl mirroring (e.g. a WoW UI strip cropped from
+    // the bottom of a taller-than-normal stream). Swappable with touch-controls mode.
+
+    private final SurfaceHolder.Callback mirrorSurfaceCallback = new SurfaceHolder.Callback() {
+        @Override
+        public void surfaceCreated(@NonNull SurfaceHolder holder) {
+            mirrorSurfaceReady = true;
+            if (controlMode == ControlMode.MIRROR && isMirrorModeSupported()) {
+                applyMirrorSurface();
+            }
+        }
+
+        @Override
+        public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
+            if (controlMode == ControlMode.MIRROR && isMirrorModeSupported()) {
+                applyMirrorSurface();
+            }
+        }
+
+        @Override
+        public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+            mirrorSurfaceReady = false;
+            releaseMirroredSurface();
+        }
+    };
+
+    @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private boolean isMirrorModeSupported() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE;
+    }
+
+    private void toggleControlMode() {
+        if (!isMirrorModeSupported()) {
+            Toast.makeText(this, getString(R.string.mirror_mode_unsupported), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        setControlMode(controlMode == ControlMode.TOUCH ? ControlMode.MIRROR : ControlMode.TOUCH);
+    }
+
+    private void setControlMode(ControlMode mode) {
+        controlMode = mode;
+        boolean mirror = mode == ControlMode.MIRROR;
+        mirrorSurfaceView.setVisibility(mirror ? View.VISIBLE : View.GONE);
+        if (mirrorToggleButton != null) {
+            mirrorToggleButton.setAlpha(mirror ? 1.0f : 0.5f);
+        }
+        if (mirror) {
+            if (mirrorSurfaceReady && isMirrorModeSupported()) {
+                applyMirrorSurface();
+            }
+        } else {
+            releaseMirroredSurface();
+        }
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private void applyMirrorSurface() {
+        if (Game.instance == null || !mirrorSurfaceReady) {
+            return;
+        }
+        SurfaceView sourceView = Game.instance.getStreamSurfaceView();
+        if (sourceView == null) {
+            return;
+        }
+
+        SurfaceControl sourceSurfaceControl = sourceView.getSurfaceControl();
+        SurfaceControl destSurfaceControl = mirrorSurfaceView.getSurfaceControl();
+        if (sourceSurfaceControl == null || !sourceSurfaceControl.isValid()
+                || destSurfaceControl == null || !destSurfaceControl.isValid()) {
+            return;
+        }
+
+        if (mirroredSourceSurfaceControl == null) {
+            mirroredSourceSurfaceControl = SurfaceControl.mirrorSurface(sourceSurfaceControl);
+        }
+
+        int sourceWidth = prefConfig.width;
+        int sourceHeight = prefConfig.height;
+        if (sourceWidth <= 0 || sourceHeight <= 0) {
+            return;
+        }
+
+        int cropTop = clamp(getMirrorCropTop(), 0, sourceHeight - 1);
+        int cropHeight = clamp(getMirrorCropHeight(sourceHeight, cropTop), 1, sourceHeight - cropTop);
+        Rect crop = new Rect(0, cropTop, sourceWidth, cropTop + cropHeight);
+
+        int destWidth = mirrorSurfaceView.getWidth();
+        int destHeight = mirrorSurfaceView.getHeight();
+        if (destWidth <= 0 || destHeight <= 0) {
+            return;
+        }
+
+        float scaleX = destWidth / (float) sourceWidth;
+        float scaleY = destHeight / (float) cropHeight;
+
+        new SurfaceControl.Transaction()
+                .reparent(mirroredSourceSurfaceControl, destSurfaceControl)
+                .setCrop(mirroredSourceSurfaceControl, crop)
+                .setPosition(mirroredSourceSurfaceControl, 0, 0)
+                .setScale(mirroredSourceSurfaceControl, scaleX, scaleY)
+                .setVisibility(mirroredSourceSurfaceControl, true)
+                .apply();
+    }
+
+    private void releaseMirroredSurface() {
+        if (mirroredSourceSurfaceControl != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            new SurfaceControl.Transaction()
+                    .reparent(mirroredSourceSurfaceControl, null)
+                    .apply();
+            mirroredSourceSurfaceControl.release();
+            mirroredSourceSurfaceControl = null;
+        }
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
+    }
+
+    private SharedPreferences mirrorPrefs() {
+        return getSharedPreferences(MIRROR_PREFS_NAME, MODE_PRIVATE);
+    }
+
+    private int getMirrorCropTop() {
+        int defaultTop = prefConfig != null ? prefConfig.height / 2 : 1080;
+        return mirrorPrefs().getInt(PREF_MIRROR_CROP_TOP, defaultTop);
+    }
+
+    private int getMirrorCropHeight(int sourceHeight, int cropTop) {
+        int defaultHeight = Math.max(1, sourceHeight - cropTop);
+        return mirrorPrefs().getInt(PREF_MIRROR_CROP_HEIGHT, defaultHeight);
+    }
+
+    private void saveMirrorCrop(int top, int height) {
+        mirrorPrefs().edit()
+                .putInt(PREF_MIRROR_CROP_TOP, top)
+                .putInt(PREF_MIRROR_CROP_HEIGHT, height)
+                .apply();
+    }
+
+    private void showMirrorCropSettingsDialog() {
+        if (!isMirrorModeSupported()) {
+            Toast.makeText(this, getString(R.string.mirror_mode_unsupported), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int sourceHeight = prefConfig != null ? prefConfig.height : 1920;
+        int currentTop = clamp(getMirrorCropTop(), 0, Math.max(0, sourceHeight - 1));
+        int currentHeight = getMirrorCropHeight(sourceHeight, currentTop);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(16);
+        layout.setPadding(pad, pad, pad, pad);
+
+        EditText topInput = new EditText(this);
+        topInput.setHint(getString(R.string.mirror_crop_top_label));
+        topInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        topInput.setText(String.valueOf(currentTop));
+        layout.addView(topInput);
+
+        EditText heightInput = new EditText(this);
+        heightInput.setHint(getString(R.string.mirror_crop_height_label));
+        heightInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        heightInput.setText(String.valueOf(currentHeight));
+        layout.addView(heightInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.mirror_crop_settings_title))
+                .setView(layout)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    int top = parseIntOrDefault(topInput.getText().toString(), currentTop);
+                    int height = parseIntOrDefault(heightInput.getText().toString(), currentHeight);
+                    saveMirrorCrop(top, height);
+                    if (controlMode == ControlMode.MIRROR && isMirrorModeSupported()) {
+                        applyMirrorSurface();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private int parseIntOrDefault(String text, int fallback) {
+        try {
+            return Integer.parseInt(text.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
         }
     }
 
