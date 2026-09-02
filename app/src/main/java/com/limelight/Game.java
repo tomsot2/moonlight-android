@@ -1143,31 +1143,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                 break;
                             }
                         }
-                        // Passive tracking only. The actual presentContentOnWindowArea
-                        // call happens exclusively from requestCoverScreenSessionStart(),
-                        // invoked directly from a real user tap (see
-                        // VirtualControllerElement.actionToggleCoverScreen), matching
-                        // CoverPad's proven-working design.
                         coverWindowAreaInfo = rearInfo;
+
+                        if (rearInfo != null && coverWindowAreaSession == null) {
+                            androidx.window.area.WindowAreaCapability capability = rearInfo.getCapability(
+                                    androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
+                            if (capability != null && capability.getStatus() ==
+                                    androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
+                                startCoverScreenSession();
+                            }
+                        }
                     });
         } catch (Throwable t) {
-            LimeLog.warning("Cover-screen dual-display setup unavailable: " + t);
+            // WindowAreaController is unavailable on this device/OS version —
+            // fail quietly and just don't offer cover-screen placement.
+            LimeLog.warning("Cover-screen dual-display setup unavailable: " + t.getMessage());
         }
     }
 
-    /** Called directly from a real user tap (via VirtualController). Public
-     *  because VirtualController lives in a different package. */
-    public void requestCoverScreenSessionStart() {
+    private void startCoverScreenSession() {
         if (coverWindowAreaInfo == null || windowAreaController == null || coverWindowAreaSession != null) {
-            return;
-        }
-        androidx.window.area.WindowAreaCapability capability = coverWindowAreaInfo.getCapability(
-                androidx.window.area.WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
-        String statusText = "Capability status: " + (capability != null ? capability.getStatus() : "null");
-        Toast.makeText(this, "Cover screen: " + statusText, Toast.LENGTH_LONG).show();
-
-        if (capability == null || capability.getStatus() !=
-                androidx.window.area.WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
             return;
         }
         try {
@@ -1178,7 +1173,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     this);
         } catch (Throwable t) {
             LimeLog.warning("Failed to start cover-screen session: " + t.getMessage());
-            Toast.makeText(this, "Cover-screen start FAILED: " + t, Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1192,10 +1186,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (virtualController != null) {
             virtualController.setCoverFrameLayout(coverScreenFrameLayout);
         }
-
-        // This is the authoritative "it actually worked" signal — equivalent
-        // to CoverPad's confirmed-working "Cover triggers active" toast.
-        Toast.makeText(this, "✓ Cover-screen session STARTED", Toast.LENGTH_LONG).show();
     }
 
     @Override
@@ -1209,13 +1199,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             virtualController.setCoverFrameLayout(null);
         }
 
-        LimeLog.warning("Cover-screen session ended. error=" + t);
-        Toast.makeText(this, "✗ Cover-screen session ENDED" + (t != null ? (": " + t) : " (no error — system/OS closed it)"), Toast.LENGTH_LONG).show();
+        if (t != null) {
+            LimeLog.warning("Cover-screen session ended with error: " + t.getMessage());
+        }
     }
 
     @Override
     public void onContainerVisibilityChanged(boolean isVisible) {
-        Toast.makeText(this, "Cover-screen container visible=" + isVisible, Toast.LENGTH_SHORT).show();
+        // No action needed — buttons stay live regardless of container
+        // visibility state; this is purely informational.
     }
 
     private void teardownCoverScreenSession() {

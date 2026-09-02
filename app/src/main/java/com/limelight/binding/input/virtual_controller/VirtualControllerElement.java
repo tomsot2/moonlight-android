@@ -114,14 +114,12 @@ public abstract class VirtualControllerElement extends View {
         coverScreen = !coverScreen;
         invalidate();
         if (virtualController != null) {
-            // Request the session start directly from this real user tap —
-            // matching CoverPad's proven-working design where
-            // presentContentOnWindowArea was only ever called from a button's
-            // onClick, not automatically from a background listener/lifecycle
-            // callback. This call is async — Game's onSessionStarted/onSessionEnded
-            // are the authoritative signal of what actually happened, not this tap.
-            virtualController.requestCoverScreenSessionStart();
             virtualController.refreshCoverScreenPlacement();
+            String status = coverScreen ? "ON" : "OFF";
+            if (coverScreen && !virtualController.hasCoverFrameLayout()) {
+                status += " (no cover screen session active — button stays on main screen)";
+            }
+            android.widget.Toast.makeText(getContext(), "Cover screen: " + status, android.widget.Toast.LENGTH_SHORT).show();
         }
     }
 
