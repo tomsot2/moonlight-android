@@ -2,7 +2,7 @@ name: Build Artemis (vanilla, pre-CoverPad-integration check)
 
 on:
   push:
-    branches: [ main, coverpad-integration ]
+    branches: [ main, coverpad-integration, moonlight-noir ]
   workflow_dispatch:
 
 jobs:
