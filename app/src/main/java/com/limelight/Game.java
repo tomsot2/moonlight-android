@@ -2066,11 +2066,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean handleKeyDown(KeyEvent event) {
-        // TEMPORARY DEBUG: shows every key-down as a toast so an unknown
-        // hardware button's keycode can be read off-device without adb.
-        // Remove once done.
-        showDebugKeycodeToast(event);
-
         // Pass-through virtual navigation keys
         if ((event.getFlags() & KeyEvent.FLAG_VIRTUAL_HARD_KEY) != 0) {
             return false;
