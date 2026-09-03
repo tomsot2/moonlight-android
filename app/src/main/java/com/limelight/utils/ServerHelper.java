@@ -119,6 +119,19 @@ public class ServerHelper {
     }
 
     /**
+     * Public entry point for callers outside this class (e.g. Game deciding whether
+     * to auto-match the stream resolution to the target display's native mode —
+     * that's wanted for a genuine external monitor, but not for a dual-internal-screen
+     * device where the user may have deliberately configured a taller-than-native
+     * custom resolution, such as to split a cropped region across both panels).
+     */
+    public static boolean isDualInternalScreenDevice(Context context) {
+        DisplayManager displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+        Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
+        return isDualInternalScreenDevice(displayManager, defaultDisplay);
+    }
+
+    /**
      * Check if the device has two internal screens (dual-screen handheld like AYN Thor).
      * Uses combined heuristics: flag patterns across all displays, name checks, and a
      * fallback for devices where the secondary panel doesn't clearly self-identify.

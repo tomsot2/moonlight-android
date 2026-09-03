@@ -435,6 +435,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && onExternelDisplay
                 && prefConfig.renderMode == 0 // For 3D we want to maintain configured resolution
+                // Dual-internal-screen devices (e.g. AYN Thor) may deliberately use a
+                // taller-than-native custom resolution (to crop/split content across
+                // both panels) — don't clobber it with the panel's native mode here.
+                && !ServerHelper.isDualInternalScreenDevice(this)
         ) {
             Display.Mode currentMode = currentDisplay.getMode();
             displayWidth = currentMode.getPhysicalWidth();
