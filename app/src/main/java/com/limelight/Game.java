@@ -211,10 +211,36 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     /**
      * Exposes the primary stream's SurfaceView so other displays (e.g. a secondary
-     * internal screen on dual-screen devices) can mirror it via SurfaceControl.
+     * internal screen on dual-screen devices) can mirror it via PixelCopy.
      */
     public SurfaceView getStreamSurfaceView() {
         return streamContainer != null ? streamContainer.getSurfaceView() : null;
+    }
+
+    /**
+     * Exposes the input pipeline so a second on-screen controller hosted on
+     * another display (e.g. a dual-screen device's secondary screen) can drive
+     * the same stream.
+     */
+    public ControllerHandler getControllerHandler() {
+        return controllerHandler;
+    }
+
+    /**
+     * Hides (or restores) this Activity's own on-screen controller — used when
+     * a secondary display is showing its own copy instead, so the two don't
+     * both render/receive input at once. Restoring respects the user's own
+     * show/hide preference rather than forcing it back on.
+     */
+    public void setOwnOscHidden(boolean hidden) {
+        if (virtualController == null) {
+            return;
+        }
+        if (hidden) {
+            virtualController.hide();
+        } else if (prefConfig.onscreenController) {
+            virtualController.show();
+        }
     }
 
     private boolean pendingDrag = false;

@@ -56,6 +56,7 @@ import com.limelight.GameMenu;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.StartExternalDisplayControlReceiver;
+import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardLayoutController;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.ExternalControllerView;
@@ -79,8 +80,11 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private ImageButton mirrorToggleButton;
     private KeyBoardLayoutController keyBoardLayoutController;
 
-    private enum ControlMode { TOUCH, MIRROR }
+    // Cycles TOUCH -> CONTROLLER -> MIRROR -> TOUCH via mirrorToggleButton.
+    private enum ControlMode { TOUCH, CONTROLLER, MIRROR }
     private ControlMode controlMode = ControlMode.TOUCH;
+
+    private VirtualController secondaryVirtualController;
 
     private static final String MIRROR_PREFS_NAME = "mirror_mode_prefs";
     private static final String PREF_MIRROR_CROP_TOP = "mirror_crop_top_px";
@@ -228,8 +232,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private void initTouchEventHandling() {
         // Intercept touch events on root layout
         rootLayout.setOnTouchListener((v, event) -> {
-            if (controlMode == ControlMode.MIRROR) {
-                // Mirror mode is a passive preview; don't forward synthetic touchpad input.
+            if (controlMode == ControlMode.MIRROR || controlMode == ControlMode.CONTROLLER) {
+                // Mirror mode is a passive preview, and controller mode's buttons
+                // handle their own touches — neither wants synthetic touchpad input
+                // for whatever's left over (background taps miss both).
                 return false;
             }
             if (Game.instance != null) {
@@ -262,6 +268,14 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         if (mirrorBitmap != null) {
             mirrorBitmap.recycle();
             mirrorBitmap = null;
+        }
+        if (secondaryVirtualController != null) {
+            secondaryVirtualController.removeElements();
+            secondaryVirtualController = null;
+        }
+        // Restore Game's own on-screen controller if this screen was showing it instead.
+        if (controlMode == ControlMode.CONTROLLER && Game.instance != null) {
+            Game.instance.setOwnOscHidden(false);
         }
         instance = null;
     }
@@ -530,20 +544,35 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     }
 
     private void toggleControlMode() {
-        if (!isMirrorModeSupported()) {
-            Toast.makeText(this, getString(R.string.mirror_mode_unsupported), Toast.LENGTH_SHORT).show();
-            return;
+        ControlMode next;
+        switch (controlMode) {
+            case TOUCH:
+                next = ControlMode.CONTROLLER;
+                break;
+            case CONTROLLER:
+                next = ControlMode.MIRROR;
+                break;
+            default:
+                next = ControlMode.TOUCH;
+                break;
         }
-        setControlMode(controlMode == ControlMode.TOUCH ? ControlMode.MIRROR : ControlMode.TOUCH);
+        if (next == ControlMode.MIRROR && !isMirrorModeSupported()) {
+            // Skip straight past the unsupported mode rather than getting stuck on it.
+            next = ControlMode.TOUCH;
+        }
+        setControlMode(next);
     }
 
     private void setControlMode(ControlMode mode) {
         controlMode = mode;
         boolean mirror = mode == ControlMode.MIRROR;
+        boolean controller = mode == ControlMode.CONTROLLER;
+
         mirrorSurfaceView.setVisibility(mirror ? View.VISIBLE : View.GONE);
         if (mirrorToggleButton != null) {
-            mirrorToggleButton.setAlpha(mirror ? 1.0f : 0.5f);
+            mirrorToggleButton.setAlpha(mode == ControlMode.TOUCH ? 0.5f : 1.0f);
         }
+
         if (mirror) {
             if (mirrorSurfaceReady) {
                 startMirrorLoop();
@@ -551,6 +580,48 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         } else {
             stopMirrorLoop();
         }
+
+        if (controller) {
+            showSecondaryController();
+        } else if (secondaryVirtualController != null) {
+            secondaryVirtualController.hide();
+        }
+        // Game's own on-screen controller should only be visible on whichever
+        // display is actually driving input right now.
+        if (Game.instance != null) {
+            Game.instance.setOwnOscHidden(controller);
+        }
+
+        Toast.makeText(this, getControlModeLabel(mode), Toast.LENGTH_SHORT).show();
+    }
+
+    private String getControlModeLabel(ControlMode mode) {
+        switch (mode) {
+            case CONTROLLER:
+                return getString(R.string.control_mode_controller);
+            case MIRROR:
+                return getString(R.string.control_mode_mirror);
+            default:
+                return getString(R.string.control_mode_touch);
+        }
+    }
+
+    /**
+     * Lazily creates a second VirtualController hosted on this screen, sharing
+     * Game's ControllerHandler so button presses reach the same stream. It
+     * reuses the same saved OSC layout/profile as Game's own controller (they
+     * share the same SharedPreferences-backed configuration), since only one
+     * of the two is ever visible/interactive at a time.
+     */
+    private void showSecondaryController() {
+        if (Game.instance == null) {
+            return;
+        }
+        if (secondaryVirtualController == null) {
+            secondaryVirtualController = new VirtualController(Game.instance.getControllerHandler(), rootLayout, this);
+            secondaryVirtualController.refreshLayout();
+        }
+        secondaryVirtualController.show();
     }
 
     private void startMirrorLoop() {

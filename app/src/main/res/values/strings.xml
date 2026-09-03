@@ -646,6 +646,9 @@
     <string name="mirror_crop_settings_title">Mirror Crop Region</string>
     <string name="mirror_crop_top_label">Crop top (source px)</string>
     <string name="mirror_crop_height_label">Crop height (source px)</string>
+    <string name="control_mode_touch">Touch controls</string>
+    <string name="control_mode_controller">On-screen controller</string>
+    <string name="control_mode_mirror">Mirror mode</string>
     <string name="get_clipboard_failed">Failed to get clipboard: </string>
     <string name="send_clipboard_success">Clipboard sent successfully</string>
     <string name="get_clipboard_success">Clipboard get successfully</string>
