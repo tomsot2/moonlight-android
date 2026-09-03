@@ -209,6 +209,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
+    // TEMPORARY DEBUG: see handleKeyDown(). Remove along with that call once done.
+    private Toast debugKeyToast;
+    private void showDebugKeycodeToast(KeyEvent event) {
+        if (debugKeyToast != null) {
+            debugKeyToast.cancel();
+        }
+        String name = KeyEvent.keyCodeToString(event.getKeyCode());
+        debugKeyToast = Toast.makeText(this, "Key: " + name + " (" + event.getKeyCode() + ")", Toast.LENGTH_LONG);
+        debugKeyToast.show();
+    }
+
     /**
      * Exposes the primary stream's SurfaceView so other displays (e.g. a secondary
      * internal screen on dual-screen devices) can mirror it via PixelCopy.
@@ -2066,6 +2077,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean handleKeyDown(KeyEvent event) {
+        // TEMPORARY DEBUG: shows every key-down as a toast so an unknown
+        // hardware button's keycode can be read off-device without adb.
+        // Remove once done.
+        showDebugKeycodeToast(event);
+
         // Pass-through virtual navigation keys
         if ((event.getFlags() & KeyEvent.FLAG_VIRTUAL_HARD_KEY) != 0) {
             return false;
