@@ -33,7 +33,6 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -95,13 +94,8 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private boolean mirrorLoopRunning = false;
     private final Runnable mirrorFrameRunnable = this::captureMirrorFrame;
 
-    private boolean isKeyboardVisible = false;
-
     private final Handler handler = new Handler(Looper.getMainLooper());
     private int failCount = 0;
-    private Runnable dimScreenRunnable;
-    private float originalBrightness = -1f; // -1 = use system default
-    private static final int INACTIVITY_TIMEOUT_MS = 10_000;
 
 
     private static final String NOTIFICATION_CHANNEL_ID = "secondary_screen_active_channel_id";
@@ -151,12 +145,17 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
                 finish();
             } else {
                 // For dual internal screen devices, Game's EXTRA_DISPLAY_ID is already set
-                // to the larger display; honor it instead of using getSecondaryDisplay()
-                int gameDisplayId = gameIntent.getIntExtra(Game.EXTRA_DISPLAY_ID, Display.DEFAULT_DISPLAY);
-                boolean isDualInternal = getIntent().getIntExtra(EXTRA_LAUNCH_DISPLAY_ID, Display.DEFAULT_DISPLAY) != Display.DEFAULT_DISPLAY;
+                // to the stream display; honor it instead of using getSecondaryDisplay().
+                // -1 (not Display.DEFAULT_DISPLAY, which is 0 — a legitimate display id)
+                // is the sentinel for "not set", since the stream display can legitimately
+                // be display 0 (e.g. after swapDualScreens flips the assignment).
+                int launchDisplayId = getIntent().getIntExtra(EXTRA_LAUNCH_DISPLAY_ID, -1);
+                boolean isDualInternal = launchDisplayId != -1;
 
-                if (isDualInternal && gameDisplayId != Display.DEFAULT_DISPLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (isDualInternal && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     // Dual internal screen: launch Game on the display specified in EXTRA_DISPLAY_ID
+                    int gameDisplayId = gameIntent.getIntExtra(Game.EXTRA_DISPLAY_ID, -1);
+                    if (gameDisplayId == -1) gameDisplayId = Display.DEFAULT_DISPLAY;
                     ActivityOptions options = ActivityOptions.makeBasic();
                     options.setLaunchDisplayId(gameDisplayId);
                     DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
@@ -216,18 +215,12 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(getWindow().getDecorView(), (v, insets) -> {
-                boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
-                updateKeyboardVisibility(imeVisible || (keyBoardLayoutController != null && keyBoardLayoutController.isKeyboardVisible()));
-                return androidx.core.view.ViewCompat.onApplyWindowInsets(v, insets);
-            });
         }
 
         initializeComponents();
         createProgrammaticUI();
         checkNotificationPermission();
         initTouchEventHandling();
-        setupInactivityTimeoutForBrightness();
         requestFocusToGameActivity(false);
     }
 
@@ -239,7 +232,6 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
                 // Mirror mode is a passive preview; don't forward synthetic touchpad input.
                 return false;
             }
-            handleUserActivity();
             if (Game.instance != null) {
                 Game.instance.handleMotionEvent(v, event);
             }
@@ -276,60 +268,8 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
 
     @Override
     public void onKeyboardControllerVisibilityChange(boolean visible) {
-        updateKeyboardVisibility(visible);
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private void setupInactivityTimeoutForBrightness() {
-        // Save the original brightness
-        WindowManager.LayoutParams layout = getWindow().getAttributes();
-        originalBrightness = layout.screenBrightness;
-
-        // Runnable to dim screen
-        dimScreenRunnable = () -> {
-            WindowManager.LayoutParams l = getWindow().getAttributes();
-            l.screenBrightness = 0.0f;
-            getWindow().setAttributes(l);
-        };
-
-        // Start the timer
-        resetInactivityTimer();
-    }
-
-    private void updateKeyboardVisibility(boolean visible) {
-        if (isKeyboardVisible != visible) {
-            isKeyboardVisible = visible;
-            if (isKeyboardVisible) {
-                // Keyboard is visible, so prevent screen dimming
-                handler.removeCallbacks(dimScreenRunnable);
-                // and restore brightness
-                restoreBrightnessIfNeeded();
-            } else {
-                // Keyboard is hidden, so resume inactivity timer
-                resetInactivityTimer();
-            }
-        }
-    }
-
-    private void restoreBrightnessIfNeeded() {
-        WindowManager.LayoutParams l = getWindow().getAttributes();
-        if (l.screenBrightness == 0.0f) {
-            l.screenBrightness = originalBrightness;
-            getWindow().setAttributes(l);
-        }
-    }
-
-    private void handleUserActivity() {
-        // Restore brightness if dimmed
-        restoreBrightnessIfNeeded();
-        resetInactivityTimer();
-    }
-
-    private void resetInactivityTimer() {
-        handler.removeCallbacks(dimScreenRunnable);
-        if (!isKeyboardVisible) {
-            handler.postDelayed(dimScreenRunnable, INACTIVITY_TIMEOUT_MS);
-        }
+        // No-op: this screen intentionally never dims (see initTouchEventHandling),
+        // so there's no brightness/inactivity state to track here.
     }
 
     @Override

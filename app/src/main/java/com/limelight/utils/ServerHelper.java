@@ -62,31 +62,73 @@ public class ServerHelper {
         return i;
     }
     /**
+     * Check if a display's name suggests it's an externally connected display
+     * (HDMI, DP, AR glasses, USB monitor, etc.).
+     */
+    private static boolean hasExternalDisplayName(Display display) {
+        String name = display.getName();
+        if (name == null) return false;
+        String lower = name.toLowerCase();
+        return lower.contains("hdmi") || lower.contains("displayport") ||
+               lower.contains("dp-") || lower.contains("dp_") ||
+               lower.contains("external") || lower.contains("virtual") ||
+               lower.contains("miracast") || lower.contains("wireless") ||
+               lower.contains("xreal") || lower.contains("rokid") ||
+               lower.contains("viture") || lower.contains("nreal") ||
+               lower.contains("quest") || lower.contains("pico") ||
+               lower.contains("hololens") || lower.contains("magic leap") ||
+               lower.contains("vuzix") || lower.contains("epson") ||
+               lower.contains("mad gaze") || lower.contains("shadow") ||
+               lower.contains("lenovo") || lower.contains("thinkreality");
+    }
+
+    /**
      * Check if a display is a built-in/internal screen (not an externally connected display).
-     * Uses flag-based heuristics and manufacturer name matching.
+     * Uses multiple heuristics: flags, display name patterns, and manufacturer matching.
      */
     private static boolean isBuiltInDisplay(Display display) {
         int flags = display.getFlags();
+
         // FLAG_PRIVATE indicates the display is internal/private to the system
         if ((flags & Display.FLAG_PRIVATE) != 0) {
             return true;
         }
-        // Internal screens often have device manufacturer in their name
+
+        // Known external display name patterns → definitely external
+        if (hasExternalDisplayName(display)) {
+            return false;
+        }
+
+        // SECURE and PROTECTED flags are typical of built-in displays (DRM-protected panels).
+        // External displays (HDMI, DP, AR glasses) rarely have these flags.
+        if ((flags & Display.FLAG_SECURE) != 0 ||
+            (flags & Display.FLAG_SUPPORTS_PROTECTED_BUFFERS) != 0) {
+            return true;
+        }
+
+        // Manufacturer name match (internal screens often have device OEM in display name)
         String displayName = display.getName();
         String deviceManufacturer = Build.MANUFACTURER;
         if (displayName != null && deviceManufacturer != null &&
             displayName.toLowerCase().contains(deviceManufacturer.toLowerCase())) {
             return true;
         }
+
+        // Default: treat as external (safer to use external display mode features)
         return false;
     }
 
     /**
      * Check if the device has two internal screens (dual-screen handheld like AYN Thor).
+     * Uses combined heuristics: flag patterns across all displays, name checks, and a
+     * fallback for devices where the secondary panel doesn't clearly self-identify.
      */
     private static boolean isDualInternalScreenDevice(DisplayManager displayManager, Display defaultDisplay) {
+        Display[] allDisplays = displayManager.getDisplays();
         int internalScreenCount = 0;
-        for (Display d : displayManager.getDisplays()) {
+        int totalScreens = allDisplays.length;
+
+        for (Display d : allDisplays) {
             LimeLog.info("Display " + d.getDisplayId() + ": " + d.getName() +
                          " " + d.getMode().getPhysicalWidth() + "x" + d.getMode().getPhysicalHeight() +
                          " flags=" + d.getFlags());
@@ -94,8 +136,39 @@ public class ServerHelper {
                 internalScreenCount++;
             }
         }
-        LimeLog.info("Detected " + internalScreenCount + " internal screen(s)");
-        return internalScreenCount >= 2;
+
+        // If standard detection found >= 2 internal screens, we're done
+        if (internalScreenCount >= 2) {
+            LimeLog.info("Detected " + internalScreenCount + " internal screen(s) — dual internal screen device");
+            return true;
+        }
+
+        // Fallback: if there are exactly 2 displays and neither has clear external
+        // indicators, AND both share SECURE or PROTECTED flags, treat as dual internal.
+        // This catches devices like AYN Thor where the secondary screen has PRESENTATION
+        // flag but is actually a second built-in panel.
+        if (totalScreens == 2 && internalScreenCount == 1) {
+            int defaultFlags = defaultDisplay.getFlags();
+            boolean defaultIsSecure = (defaultFlags & (Display.FLAG_SECURE | Display.FLAG_SUPPORTS_PROTECTED_BUFFERS)) != 0;
+
+            for (Display d : allDisplays) {
+                if (d.getDisplayId() == Display.DEFAULT_DISPLAY) continue;
+                if (isBuiltInDisplay(d)) continue; // already counted above
+
+                int dFlags = d.getFlags();
+                boolean dIsSecure = (dFlags & (Display.FLAG_SECURE | Display.FLAG_SUPPORTS_PROTECTED_BUFFERS)) != 0;
+
+                // If non-default display shares SECURE/PROTECTED with default AND
+                // has no external name, it's likely a secondary internal screen
+                if (defaultIsSecure && dIsSecure && !hasExternalDisplayName(d)) {
+                    LimeLog.info("Non-default display shares internal flags with default — treating as dual internal screen");
+                    return true;
+                }
+            }
+        }
+
+        LimeLog.info("Detected " + internalScreenCount + " internal screen(s) — not dual internal");
+        return false;
     }
 
     /**
@@ -123,9 +196,9 @@ public class ServerHelper {
      *
      * @return a two-element array: {streamDisplay, controlDisplay}
      */
-    private static Display[] getStreamAndControlDisplays(Display defaultDisplay, Display secondary, PreferenceConfiguration prefs) {
+    private static Display[] getStreamAndControlDisplays(DisplayManager displayManager, Display defaultDisplay, Display secondary, PreferenceConfiguration prefs) {
         Display streamDisplay;
-        if (isBuiltInDisplay(defaultDisplay) && isBuiltInDisplay(secondary)) {
+        if (isDualInternalScreenDevice(displayManager, defaultDisplay)) {
             LimeLog.info("Dual internal screen detected - selecting stream display");
             streamDisplay = getLargerDisplay(defaultDisplay, secondary);
         } else {
@@ -148,7 +221,7 @@ public class ServerHelper {
         Display secondary = getSecondaryDisplay(context);
 
         if (secondary != null && prefs.enableFullExDisplay) {
-            return getStreamAndControlDisplays(defaultDisplay, secondary, prefs)[0];
+            return getStreamAndControlDisplays(displayManager, defaultDisplay, secondary, prefs)[0];
         }
 
         return defaultDisplay;
@@ -219,7 +292,7 @@ public class ServerHelper {
         Display streamDisplay = null;
         Display controlDisplay = null;
         if (enableFullEx) {
-            Display[] pair = getStreamAndControlDisplays(defaultDisplay, secondaryDisplay, prefConfig);
+            Display[] pair = getStreamAndControlDisplays(displayManager, defaultDisplay, secondaryDisplay, prefConfig);
             streamDisplay = pair[0];
             controlDisplay = pair[1];
         }
@@ -279,9 +352,11 @@ public class ServerHelper {
 
         Intent intent = createStartIntent(parent, app, computer, managerBinder, withVDisplay);
 
-        // For dual internal screen devices, launch the touchpad on the control display
-        int launchDisplayId = intent.getIntExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, Display.DEFAULT_DISPLAY);
-        if (launchDisplayId != Display.DEFAULT_DISPLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        // For dual internal screen devices, launch the touchpad on the control display.
+        // -1 (not Display.DEFAULT_DISPLAY, which is a legitimate display id — 0) is the
+        // sentinel for "not set".
+        int launchDisplayId = intent.getIntExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, -1);
+        if (launchDisplayId != -1 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.app.ActivityOptions options = android.app.ActivityOptions.makeBasic();
             options.setLaunchDisplayId(launchDisplayId);
             parent.startActivity(intent, options.toBundle());
