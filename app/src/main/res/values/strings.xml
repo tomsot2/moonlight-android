@@ -503,6 +503,8 @@
     <string name="title_fullexdisplay_mode">Fully External Display Mode (Beta)</string>
     <string name="summary_exdisplay_mode">Stream display on the monitor, virtual buttons and performance information and other controls on the phone screen.</string>
     <string name="summary_fullexdisplay_mode">Allows full immersive secondary screen mode with automatically matched refresh rate and resolution. Manual settings won\'t apply in this mode.</string>
+    <string name="title_swap_dual_screens">Swap dual-screen assignment</string>
+    <string name="summary_swap_dual_screens">On dual-internal-screen devices (e.g. AYN Thor), swaps which screen gets the game stream vs. the touch/mirror controller, if they came out backwards.</string>
     <string name="title_top_center_display">Display in Top Center</string>
     <string name="summary_top_center_display">Streaming picture will be aligned to the top of the screen instead of centered when resolution is not native.</string>
     <string name="title_touch_sensitivity">Touch Screen Sensitivity</string>

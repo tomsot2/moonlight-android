@@ -109,6 +109,20 @@ public class ServerHelper {
         return (areaA >= areaB) ? a : b;
     }
 
+    /**
+     * Picks which of the two internal displays the game stream should go on.
+     * Defaults to the larger one, but "larger" is a proxy for "the right one"
+     * that can't be verified against physical top/bottom position on unknown
+     * hardware (e.g. identically-sized panels tie-break to the default display,
+     * which isn't necessarily the top one) — swapDualScreens lets the user
+     * correct it once for their specific device.
+     */
+    private static Display getStreamDisplayForDualInternal(Display defaultDisplay, Display secondary, PreferenceConfiguration prefs) {
+        Display larger = getLargerDisplay(defaultDisplay, secondary);
+        Display smaller = (larger == defaultDisplay) ? secondary : defaultDisplay;
+        return prefs.swapDualScreens ? smaller : larger;
+    }
+
     public static Display getActiveDisplay(Context context, PreferenceConfiguration prefs) {
         DisplayManager displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
         Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
@@ -117,9 +131,8 @@ public class ServerHelper {
         if (secondary != null && prefs.enableFullExDisplay) {
             // Check if both displays are internal (dual-screen device like AYN Thor)
             if (isBuiltInDisplay(defaultDisplay) && isBuiltInDisplay(secondary)) {
-                // Dual internal screens: use the LARGER one for streaming
-                LimeLog.info("Dual internal screen detected - selecting larger display for streaming");
-                return getLargerDisplay(defaultDisplay, secondary);
+                LimeLog.info("Dual internal screen detected - selecting stream display");
+                return getStreamDisplayForDualInternal(defaultDisplay, secondary, prefs);
             }
             // True external display (AR glasses, USB monitor, etc.): use it
             return secondary;
@@ -195,10 +208,10 @@ public class ServerHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && enableFullEx) {
             Context displayContext;
             if (isDualInternal) {
-                // Dual internal screens: use the larger display for Game context
+                // Dual internal screens: use the stream-assigned display for Game context
                 Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
-                Display largerDisplay = getLargerDisplay(defaultDisplay, secondaryDisplay);
-                displayContext = parent.createDisplayContext(largerDisplay);
+                Display streamDisplay = getStreamDisplayForDualInternal(defaultDisplay, secondaryDisplay, prefConfig);
+                displayContext = parent.createDisplayContext(streamDisplay);
             } else {
                 displayContext = parent.createDisplayContext(secondaryDisplay);
             }
@@ -229,16 +242,16 @@ public class ServerHelper {
 
         if (enableFullEx) {
             if (isDualInternal) {
-                // Dual internal screens (e.g. AYN Thor): stream on larger display, controls on smaller
+                // Dual internal screens (e.g. AYN Thor): stream on one display, controls on the other
                 Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
-                Display largerDisplay = getLargerDisplay(defaultDisplay, secondaryDisplay);
-                Display smallerDisplay = (largerDisplay == defaultDisplay) ? secondaryDisplay : defaultDisplay;
+                Display streamDisplay = getStreamDisplayForDualInternal(defaultDisplay, secondaryDisplay, prefConfig);
+                Display controlDisplay = (streamDisplay == defaultDisplay) ? secondaryDisplay : defaultDisplay;
 
-                gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, largerDisplay.getDisplayId());
+                gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, streamDisplay.getDisplayId());
                 Intent touchpadIntent = new Intent(parent, ExternalDisplayControlActivity.class);
                 touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_INTENT, gameIntent);
-                // Signal to doStart() to launch touchpad on the smaller display
-                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, smallerDisplay.getDisplayId());
+                // Signal to doStart() to launch touchpad on the control display
+                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, controlDisplay.getDisplayId());
                 return touchpadIntent;
             } else {
                 // True external display: original behavior (stream on external, controls on default)
@@ -268,7 +281,7 @@ public class ServerHelper {
 
         Intent intent = createStartIntent(parent, app, computer, managerBinder, withVDisplay);
 
-        // For dual internal screen devices, launch the touchpad on the smaller display
+        // For dual internal screen devices, launch the touchpad on the control display
         int launchDisplayId = intent.getIntExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, Display.DEFAULT_DISPLAY);
         if (launchDisplayId != Display.DEFAULT_DISPLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.app.ActivityOptions options = android.app.ActivityOptions.makeBasic();
