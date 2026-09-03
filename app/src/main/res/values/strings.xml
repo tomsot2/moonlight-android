@@ -644,6 +644,9 @@
     <string name="no_game_instance">No game instance available</string>
     <string name="mirror_mode_unsupported">Mirror mode requires Android 8.0 or later</string>
     <string name="mirror_crop_settings_title">Mirror Crop Region</string>
+    <string name="mirror_dest_size_label">This screen is %1$dx%2$d — match that aspect ratio below to avoid stretching</string>
+    <string name="mirror_crop_left_label">Crop left (source px)</string>
+    <string name="mirror_crop_width_label">Crop width (source px)</string>
     <string name="mirror_crop_top_label">Crop top (source px)</string>
     <string name="mirror_crop_height_label">Crop height (source px)</string>
     <string name="control_mode_touch">Touch controls</string>

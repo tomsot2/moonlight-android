@@ -125,6 +125,15 @@ public class VirtualController {
         return handler;
     }
 
+    /**
+     * Exposes the configure (gear) button so a caller hosting this controller
+     * in a non-default layout can reposition it — e.g. to avoid overlapping
+     * other buttons already occupying its default top-left corner.
+     */
+    public Button getConfigureButton() {
+        return buttonConfigure;
+    }
+
     public void hide() {
         for (VirtualControllerElement element : elements) {
             element.setVisibility(View.GONE);

@@ -209,17 +209,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
-    // TEMPORARY DEBUG: see handleKeyDown(). Remove along with that call once done.
-    private Toast debugKeyToast;
-    private void showDebugKeycodeToast(KeyEvent event) {
-        if (debugKeyToast != null) {
-            debugKeyToast.cancel();
-        }
-        String name = KeyEvent.keyCodeToString(event.getKeyCode());
-        debugKeyToast = Toast.makeText(this, "Key: " + name + " (" + event.getKeyCode() + ")", Toast.LENGTH_LONG);
-        debugKeyToast.show();
-    }
-
     /**
      * Exposes the primary stream's SurfaceView so other displays (e.g. a secondary
      * internal screen on dual-screen devices) can mirror it via PixelCopy.
@@ -2773,6 +2762,69 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         float[] normalizedContactArea = getStreamViewNormalizedContactArea(event, pointerIndex);
         return conn.sendTouchEvent(eventType, event.getPointerId(pointerIndex),
                 normalizedCoords[0], normalizedCoords[1],
+                getPressureOrDistance(event, pointerIndex),
+                normalizedContactArea[0], normalizedContactArea[1],
+                getRotationDegrees(event, pointerIndex)) != MoonBridge.LI_ERR_UNSUPPORTED;
+    }
+
+    /**
+     * Forwards real touch injection for a touch that occurred on a different
+     * display's view entirely (e.g. mirror mode's live preview on a secondary
+     * screen), where the position must be mapped through a crop rectangle and
+     * that view's own size rather than normalized against streamContainer's
+     * bounds directly. cropLeft/Top/Width/Height are in the stream's own pixel
+     * space (matching streamContainer's actual measured size); destWidth/Height
+     * are the size of the view the touch actually landed on.
+     */
+    public boolean sendRemappedTouchEvent(MotionEvent event, int cropLeft, int cropTop, int cropWidth, int cropHeight, int destWidth, int destHeight) {
+        if (conn == null || streamContainer == null || destWidth <= 0 || destHeight <= 0) {
+            return false;
+        }
+        int streamWidth = streamContainer.getWidth();
+        int streamHeight = streamContainer.getHeight();
+        if (streamWidth <= 0 || streamHeight <= 0) {
+            return false;
+        }
+
+        byte eventType = getLiTouchTypeFromEvent(event);
+        if (eventType < 0) {
+            return false;
+        }
+
+        if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+            // Move events may impact all active pointers
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                if (!sendRemappedTouchEventForPointer(event, i, eventType, cropLeft, cropTop, cropWidth, cropHeight, destWidth, destHeight, streamWidth, streamHeight)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            return conn.sendTouchEvent(MoonBridge.LI_TOUCH_EVENT_CANCEL_ALL, 0,
+                    0, 0, 0, 0, 0,
+                    MoonBridge.LI_ROT_UNKNOWN) != MoonBridge.LI_ERR_UNSUPPORTED;
+        }
+        else {
+            return sendRemappedTouchEventForPointer(event, event.getActionIndex(), eventType, cropLeft, cropTop, cropWidth, cropHeight, destWidth, destHeight, streamWidth, streamHeight);
+        }
+    }
+
+    private boolean sendRemappedTouchEventForPointer(MotionEvent event, int pointerIndex, byte eventType,
+            int cropLeft, int cropTop, int cropWidth, int cropHeight, int destWidth, int destHeight,
+            int streamWidth, int streamHeight) {
+        float destX = Math.max(0f, Math.min(event.getX(pointerIndex), destWidth));
+        float destY = Math.max(0f, Math.min(event.getY(pointerIndex), destHeight));
+
+        float streamX = cropLeft + (destX / destWidth) * cropWidth;
+        float streamY = cropTop + (destY / destHeight) * cropHeight;
+
+        float normalizedX = streamX / streamWidth;
+        float normalizedY = streamY / streamHeight;
+
+        float[] normalizedContactArea = getStreamViewNormalizedContactArea(event, pointerIndex);
+        return conn.sendTouchEvent(eventType, event.getPointerId(pointerIndex),
+                normalizedX, normalizedY,
                 getPressureOrDistance(event, pointerIndex),
                 normalizedContactArea[0], normalizedContactArea[1],
                 getRotationDegrees(event, pointerIndex)) != MoonBridge.LI_ERR_UNSUPPORTED;

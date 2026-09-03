@@ -89,6 +89,8 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private VirtualController secondaryVirtualController;
 
     private static final String MIRROR_PREFS_NAME = "mirror_mode_prefs";
+    private static final String PREF_MIRROR_CROP_LEFT = "mirror_crop_left_px";
+    private static final String PREF_MIRROR_CROP_WIDTH = "mirror_crop_width_px";
     private static final String PREF_MIRROR_CROP_TOP = "mirror_crop_top_px";
     private static final String PREF_MIRROR_CROP_HEIGHT = "mirror_crop_height_px";
 
@@ -234,17 +236,45 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private void initTouchEventHandling() {
         // Intercept touch events on root layout
         rootLayout.setOnTouchListener((v, event) -> {
-            if (controlMode == ControlMode.MIRROR || controllerVisible) {
-                // Mirror mode is a passive preview, and the controller overlay's
-                // buttons handle their own touches — neither wants synthetic
-                // touchpad input for whatever's left over (background taps miss both).
+            if (controllerVisible) {
+                // The controller overlay's buttons handle their own touches;
+                // nothing to do with whatever's left over (background taps miss it).
                 return false;
+            }
+            if (controlMode == ControlMode.MIRROR) {
+                return forwardMirrorTouchEvent(event);
             }
             if (Game.instance != null) {
                 Game.instance.handleMotionEvent(v, event);
             }
             return true;
         });
+    }
+
+    /**
+     * Maps a touch on the mirror preview through the current crop rectangle into
+     * the stream's own coordinate space, so tapping/swiping the mirrored desktop
+     * behaves like touching it directly on the primary screen (click the Start
+     * bar, scroll a page, etc.) instead of being a passive, non-interactive view.
+     */
+    private boolean forwardMirrorTouchEvent(MotionEvent event) {
+        if (Game.instance == null) {
+            return false;
+        }
+        SurfaceView sourceView = Game.instance.getStreamSurfaceView();
+        if (sourceView == null) {
+            return false;
+        }
+        int sourceWidth = sourceView.getWidth();
+        int sourceHeight = sourceView.getHeight();
+        int destWidth = mirrorSurfaceView.getWidth();
+        int destHeight = mirrorSurfaceView.getHeight();
+        if (sourceWidth <= 0 || sourceHeight <= 0 || destWidth <= 0 || destHeight <= 0) {
+            return false;
+        }
+
+        Rect crop = getCurrentMirrorCropRect(sourceWidth, sourceHeight);
+        return Game.instance.sendRemappedTouchEvent(event, crop.left, crop.top, crop.width(), crop.height(), destWidth, destHeight);
     }
 
     @Override
@@ -448,7 +478,6 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         LinearLayout topRightButtons = createButtonContainer(Gravity.TOP | Gravity.END);
         topRightButtons.setFocusable(false);
         topRightButtons.addView(createImageButton(R.drawable.ic_menu_external, v -> showGameMenu()));
-        topRightButtons.addView(createImageButton(R.drawable.ic_close_external, v -> finish()));
         rootLayout.addView(topRightButtons);
 
         // Bottom-left button: Android keyboard toggle
@@ -608,8 +637,27 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         if (secondaryVirtualController == null) {
             secondaryVirtualController = new VirtualController(Game.instance.getControllerHandler(), rootLayout, this);
             secondaryVirtualController.refreshLayout();
+            repositionSecondaryConfigureButton();
         }
         secondaryVirtualController.show();
+    }
+
+    /**
+     * VirtualController's own configure (gear) button defaults to the top-left
+     * corner, which collides with the mirror-mode button already there. Move
+     * it to the top-right corner instead, in the spot the removed close/minimize
+     * button used to occupy (just left of the menu button).
+     */
+    private void repositionSecondaryConfigureButton() {
+        android.widget.Button configureButton = secondaryVirtualController.getConfigureButton();
+        if (configureButton == null) {
+            return;
+        }
+        int size = dpToPx(56);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(size, size);
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.rightMargin = size; // sit just left of the menu button
+        configureButton.setLayoutParams(params);
     }
 
     private void startMirrorLoop() {
@@ -646,9 +694,7 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             return;
         }
 
-        int cropTop = clamp(getMirrorCropTop(), 0, sourceHeight - 1);
-        int cropHeight = clamp(getMirrorCropHeight(sourceHeight, cropTop), 1, sourceHeight - cropTop);
-        Rect crop = new Rect(0, cropTop, sourceWidth, cropTop + cropHeight);
+        Rect crop = getCurrentMirrorCropRect(sourceWidth, sourceHeight);
 
         if (mirrorBitmap == null || mirrorBitmap.getWidth() != destWidth || mirrorBitmap.getHeight() != destHeight) {
             if (mirrorBitmap != null) {
@@ -694,8 +740,32 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         return Math.max(min, Math.min(value, max));
     }
 
+    /**
+     * The destination (this screen) is very likely a different aspect ratio than
+     * the source crop unless the crop rectangle's shape is deliberately matched
+     * to it — PixelCopy/touch mapping both scale width and height independently
+     * to the destination, so a mismatched aspect ratio here means visible
+     * squashing (video) or misaligned taps (touch).
+     */
+    private Rect getCurrentMirrorCropRect(int sourceWidth, int sourceHeight) {
+        int cropLeft = clamp(getMirrorCropLeft(), 0, sourceWidth - 1);
+        int cropWidth = clamp(getMirrorCropWidth(sourceWidth, cropLeft), 1, sourceWidth - cropLeft);
+        int cropTop = clamp(getMirrorCropTop(), 0, sourceHeight - 1);
+        int cropHeight = clamp(getMirrorCropHeight(sourceHeight, cropTop), 1, sourceHeight - cropTop);
+        return new Rect(cropLeft, cropTop, cropLeft + cropWidth, cropTop + cropHeight);
+    }
+
     private SharedPreferences mirrorPrefs() {
         return getSharedPreferences(MIRROR_PREFS_NAME, MODE_PRIVATE);
+    }
+
+    private int getMirrorCropLeft() {
+        return mirrorPrefs().getInt(PREF_MIRROR_CROP_LEFT, 0);
+    }
+
+    private int getMirrorCropWidth(int sourceWidth, int cropLeft) {
+        int defaultWidth = Math.max(1, sourceWidth - cropLeft);
+        return mirrorPrefs().getInt(PREF_MIRROR_CROP_WIDTH, defaultWidth);
     }
 
     private int getMirrorCropTop() {
@@ -708,8 +778,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         return mirrorPrefs().getInt(PREF_MIRROR_CROP_HEIGHT, defaultHeight);
     }
 
-    private void saveMirrorCrop(int top, int height) {
+    private void saveMirrorCrop(int left, int width, int top, int height) {
         mirrorPrefs().edit()
+                .putInt(PREF_MIRROR_CROP_LEFT, left)
+                .putInt(PREF_MIRROR_CROP_WIDTH, width)
                 .putInt(PREF_MIRROR_CROP_TOP, top)
                 .putInt(PREF_MIRROR_CROP_HEIGHT, height)
                 .apply();
@@ -720,7 +792,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             Toast.makeText(this, getString(R.string.mirror_mode_unsupported), Toast.LENGTH_SHORT).show();
             return;
         }
+        int sourceWidth = prefConfig != null ? prefConfig.width : 1920;
         int sourceHeight = prefConfig != null ? prefConfig.height : 1920;
+        int currentLeft = clamp(getMirrorCropLeft(), 0, Math.max(0, sourceWidth - 1));
+        int currentWidth = getMirrorCropWidth(sourceWidth, currentLeft);
         int currentTop = clamp(getMirrorCropTop(), 0, Math.max(0, sourceHeight - 1));
         int currentHeight = getMirrorCropHeight(sourceHeight, currentTop);
 
@@ -728,6 +803,25 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         layout.setOrientation(LinearLayout.VERTICAL);
         int pad = dpToPx(16);
         layout.setPadding(pad, pad, pad, pad);
+
+        // This screen's actual pixel size — the crop rectangle below should have
+        // roughly this same aspect ratio to fill it without stretching.
+        android.widget.TextView destSizeLabel = new android.widget.TextView(this);
+        destSizeLabel.setText(getString(R.string.mirror_dest_size_label, mirrorSurfaceView.getWidth(), mirrorSurfaceView.getHeight()));
+        destSizeLabel.setPadding(0, 0, 0, pad);
+        layout.addView(destSizeLabel);
+
+        EditText leftInput = new EditText(this);
+        leftInput.setHint(getString(R.string.mirror_crop_left_label));
+        leftInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        leftInput.setText(String.valueOf(currentLeft));
+        layout.addView(leftInput);
+
+        EditText widthInput = new EditText(this);
+        widthInput.setHint(getString(R.string.mirror_crop_width_label));
+        widthInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        widthInput.setText(String.valueOf(currentWidth));
+        layout.addView(widthInput);
 
         EditText topInput = new EditText(this);
         topInput.setHint(getString(R.string.mirror_crop_top_label));
@@ -745,11 +839,13 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
                 .setTitle(getString(R.string.mirror_crop_settings_title))
                 .setView(layout)
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    int left = parseIntOrDefault(leftInput.getText().toString(), currentLeft);
+                    int width = parseIntOrDefault(widthInput.getText().toString(), currentWidth);
                     int top = parseIntOrDefault(topInput.getText().toString(), currentTop);
                     int height = parseIntOrDefault(heightInput.getText().toString(), currentHeight);
                     // The capture loop re-reads crop prefs every frame, so no
                     // explicit re-apply is needed here.
-                    saveMirrorCrop(top, height);
+                    saveMirrorCrop(left, width, top, height);
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
