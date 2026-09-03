@@ -110,17 +110,36 @@ public class ServerHelper {
     }
 
     /**
-     * Picks which of the two internal displays the game stream should go on.
-     * Defaults to the larger one, but "larger" is a proxy for "the right one"
-     * that can't be verified against physical top/bottom position on unknown
-     * hardware (e.g. identically-sized panels tie-break to the default display,
-     * which isn't necessarily the top one) — swapDualScreens lets the user
-     * correct it once for their specific device.
+     * Picks which display gets the game stream and which gets the touch/mirror
+     * controller, out of the default display and a secondary one. For two
+     * internal displays (dual-screen device like AYN Thor) this defaults to the
+     * physically larger one streaming — a proxy for "the right one" that can't
+     * be verified against physical top/bottom position on unknown hardware
+     * (e.g. identically-sized panels tie-break to the default display, which
+     * isn't necessarily the top one). For a true external display, the
+     * external one streams. Either way, swapDualScreens flips the result
+     * unconditionally, so it corrects the assignment regardless of which case
+     * the heuristic thinks it's in.
+     *
+     * @return a two-element array: {streamDisplay, controlDisplay}
      */
-    private static Display getStreamDisplayForDualInternal(Display defaultDisplay, Display secondary, PreferenceConfiguration prefs) {
-        Display larger = getLargerDisplay(defaultDisplay, secondary);
-        Display smaller = (larger == defaultDisplay) ? secondary : defaultDisplay;
-        return prefs.swapDualScreens ? smaller : larger;
+    private static Display[] getStreamAndControlDisplays(Display defaultDisplay, Display secondary, PreferenceConfiguration prefs) {
+        Display streamDisplay;
+        if (isBuiltInDisplay(defaultDisplay) && isBuiltInDisplay(secondary)) {
+            LimeLog.info("Dual internal screen detected - selecting stream display");
+            streamDisplay = getLargerDisplay(defaultDisplay, secondary);
+        } else {
+            // True external display (AR glasses, USB monitor, etc.): use it
+            streamDisplay = secondary;
+        }
+        Display controlDisplay = (streamDisplay == defaultDisplay) ? secondary : defaultDisplay;
+
+        if (prefs.swapDualScreens) {
+            Display tmp = streamDisplay;
+            streamDisplay = controlDisplay;
+            controlDisplay = tmp;
+        }
+        return new Display[]{streamDisplay, controlDisplay};
     }
 
     public static Display getActiveDisplay(Context context, PreferenceConfiguration prefs) {
@@ -129,13 +148,7 @@ public class ServerHelper {
         Display secondary = getSecondaryDisplay(context);
 
         if (secondary != null && prefs.enableFullExDisplay) {
-            // Check if both displays are internal (dual-screen device like AYN Thor)
-            if (isBuiltInDisplay(defaultDisplay) && isBuiltInDisplay(secondary)) {
-                LimeLog.info("Dual internal screen detected - selecting stream display");
-                return getStreamDisplayForDualInternal(defaultDisplay, secondary, prefs);
-            }
-            // True external display (AR glasses, USB monitor, etc.): use it
-            return secondary;
+            return getStreamAndControlDisplays(defaultDisplay, secondary, prefs)[0];
         }
 
         return defaultDisplay;
@@ -199,22 +212,21 @@ public class ServerHelper {
         Intent gameIntent = null;
         PreferenceConfiguration prefConfig = PreferenceConfiguration.readPreferences(parent);
         DisplayManager displayManager = (DisplayManager) parent.getSystemService(Context.DISPLAY_SERVICE);
+        Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
         Display secondaryDisplay = getSecondaryDisplay(parent);
         boolean enableFullEx = prefConfig.enableFullExDisplay && secondaryDisplay != null;
-        boolean isDualInternal = enableFullEx && isDualInternalScreenDevice(displayManager,
-            displayManager.getDisplay(Display.DEFAULT_DISPLAY));
+
+        Display streamDisplay = null;
+        Display controlDisplay = null;
+        if (enableFullEx) {
+            Display[] pair = getStreamAndControlDisplays(defaultDisplay, secondaryDisplay, prefConfig);
+            streamDisplay = pair[0];
+            controlDisplay = pair[1];
+        }
 
         // Try to add secondary DisplayContext if supported and connected
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && enableFullEx) {
-            Context displayContext;
-            if (isDualInternal) {
-                // Dual internal screens: use the stream-assigned display for Game context
-                Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
-                Display streamDisplay = getStreamDisplayForDualInternal(defaultDisplay, secondaryDisplay, prefConfig);
-                displayContext = parent.createDisplayContext(streamDisplay);
-            } else {
-                displayContext = parent.createDisplayContext(secondaryDisplay);
-            }
+            Context displayContext = parent.createDisplayContext(streamDisplay);
             gameIntent = new Intent(displayContext, Game.class);
             gameIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
@@ -241,26 +253,12 @@ public class ServerHelper {
         }
 
         if (enableFullEx) {
-            if (isDualInternal) {
-                // Dual internal screens (e.g. AYN Thor): stream on one display, controls on the other
-                Display defaultDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
-                Display streamDisplay = getStreamDisplayForDualInternal(defaultDisplay, secondaryDisplay, prefConfig);
-                Display controlDisplay = (streamDisplay == defaultDisplay) ? secondaryDisplay : defaultDisplay;
-
-                gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, streamDisplay.getDisplayId());
-                Intent touchpadIntent = new Intent(parent, ExternalDisplayControlActivity.class);
-                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_INTENT, gameIntent);
-                // Signal to doStart() to launch touchpad on the control display
-                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, controlDisplay.getDisplayId());
-                return touchpadIntent;
-            } else {
-                // True external display: original behavior (stream on external, controls on default)
-                int secondaryDisplayId = secondaryDisplay.getDisplayId();
-                gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, secondaryDisplayId);
-                Intent touchpadIntent = new Intent(parent, ExternalDisplayControlActivity.class);
-                touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_INTENT, gameIntent);
-                return touchpadIntent;
-            }
+            gameIntent.putExtra(Game.EXTRA_DISPLAY_ID, streamDisplay.getDisplayId());
+            Intent touchpadIntent = new Intent(parent, ExternalDisplayControlActivity.class);
+            touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_INTENT, gameIntent);
+            // Signal to doStart() to launch touchpad on the control display
+            touchpadIntent.putExtra(ExternalDisplayControlActivity.EXTRA_LAUNCH_DISPLAY_ID, controlDisplay.getDisplayId());
+            return touchpadIntent;
         }
 
         return gameIntent;
