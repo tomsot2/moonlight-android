@@ -76,14 +76,16 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private PreferenceConfiguration prefConfig;
 
     private ExternalControllerView rootLayout;
-    private ImageButton zoomButton;
     private ImageButton mirrorToggleButton;
+    private ImageButton controllerToggleButton;
     private KeyBoardLayoutController keyBoardLayoutController;
 
-    // Cycles TOUCH -> CONTROLLER -> MIRROR -> TOUCH via mirrorToggleButton.
-    private enum ControlMode { TOUCH, CONTROLLER, MIRROR }
+    // Toggled via mirrorToggleButton, independently of the on-screen controller overlay.
+    private enum ControlMode { TOUCH, MIRROR }
     private ControlMode controlMode = ControlMode.TOUCH;
 
+    // Independent overlay: can be shown/hidden regardless of TOUCH vs MIRROR.
+    private boolean controllerVisible = false;
     private VirtualController secondaryVirtualController;
 
     private static final String MIRROR_PREFS_NAME = "mirror_mode_prefs";
@@ -232,10 +234,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private void initTouchEventHandling() {
         // Intercept touch events on root layout
         rootLayout.setOnTouchListener((v, event) -> {
-            if (controlMode == ControlMode.MIRROR || controlMode == ControlMode.CONTROLLER) {
-                // Mirror mode is a passive preview, and controller mode's buttons
-                // handle their own touches — neither wants synthetic touchpad input
-                // for whatever's left over (background taps miss both).
+            if (controlMode == ControlMode.MIRROR || controllerVisible) {
+                // Mirror mode is a passive preview, and the controller overlay's
+                // buttons handle their own touches — neither wants synthetic
+                // touchpad input for whatever's left over (background taps miss both).
                 return false;
             }
             if (Game.instance != null) {
@@ -274,7 +276,7 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             secondaryVirtualController = null;
         }
         // Restore Game's own on-screen controller if this screen was showing it instead.
-        if (controlMode == ControlMode.CONTROLLER && Game.instance != null) {
+        if (controllerVisible && Game.instance != null) {
             Game.instance.setOwnOscHidden(false);
         }
         instance = null;
@@ -423,13 +425,6 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         LinearLayout topLeftButtons = createButtonContainer(Gravity.TOP | Gravity.START);
         topLeftButtons.setFocusable(false);
 //        topLeftButtons.addView(createImageButton(R.drawable.ic_focus_secondary, v -> requestFocusToGameActivity(false)));
-        zoomButton = createImageButton(R.drawable.ic_zoom_toggle, v -> toggleZoomMode(true));
-        if (Game.instance != null && Game.instance.isZoomModeEnabled()) {
-            zoomButton.setAlpha(1.0f);
-        } else {
-            zoomButton.setAlpha(0.5f);
-        }
-        topLeftButtons.addView(zoomButton);
         if (isMirrorModeSupported()) {
             mirrorToggleButton = createImageButton(R.drawable.ic_mirror_toggle, v -> toggleControlMode());
             mirrorToggleButton.setAlpha(0.5f);
@@ -439,6 +434,9 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             });
             topLeftButtons.addView(mirrorToggleButton);
         }
+        controllerToggleButton = createImageButton(R.drawable.ic_controller_toggle, v -> toggleControllerVisible());
+        controllerToggleButton.setAlpha(controllerVisible ? 1.0f : 0.5f);
+        topLeftButtons.addView(controllerToggleButton);
         rootLayout.addView(topLeftButtons);
 
         // Top-center buttons
@@ -498,17 +496,14 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         keyBoardLayoutController.toggleVisibility();
     }
 
+    /**
+     * Called from Game to keep the two screens in sync when zoom mode is toggled
+     * from its own floating button on the primary display. There's no zoom
+     * button on this screen anymore, so callGame=false is just a no-op here.
+     */
     public void toggleZoomMode(boolean callGame) {
-        if (Game.instance != null) {
-            if (callGame) {
-                Game.instance.toggleZoomMode();
-            } else {
-                if (Game.instance.isZoomModeEnabled()) {
-                    zoomButton.setAlpha(1.0f);
-                } else {
-                    zoomButton.setAlpha(0.5f);
-                }
-            }
+        if (callGame && Game.instance != null) {
+            Game.instance.toggleZoomMode();
         }
     }
 
@@ -544,21 +539,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     }
 
     private void toggleControlMode() {
-        ControlMode next;
-        switch (controlMode) {
-            case TOUCH:
-                next = ControlMode.CONTROLLER;
-                break;
-            case CONTROLLER:
-                next = ControlMode.MIRROR;
-                break;
-            default:
-                next = ControlMode.TOUCH;
-                break;
-        }
+        ControlMode next = controlMode == ControlMode.TOUCH ? ControlMode.MIRROR : ControlMode.TOUCH;
         if (next == ControlMode.MIRROR && !isMirrorModeSupported()) {
-            // Skip straight past the unsupported mode rather than getting stuck on it.
-            next = ControlMode.TOUCH;
+            Toast.makeText(this, getString(R.string.mirror_mode_unsupported), Toast.LENGTH_SHORT).show();
+            return;
         }
         setControlMode(next);
     }
@@ -566,11 +550,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     private void setControlMode(ControlMode mode) {
         controlMode = mode;
         boolean mirror = mode == ControlMode.MIRROR;
-        boolean controller = mode == ControlMode.CONTROLLER;
 
         mirrorSurfaceView.setVisibility(mirror ? View.VISIBLE : View.GONE);
         if (mirrorToggleButton != null) {
-            mirrorToggleButton.setAlpha(mode == ControlMode.TOUCH ? 0.5f : 1.0f);
+            mirrorToggleButton.setAlpha(mirror ? 1.0f : 0.5f);
         }
 
         if (mirror) {
@@ -581,7 +564,23 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
             stopMirrorLoop();
         }
 
-        if (controller) {
+        Toast.makeText(this, getString(mirror ? R.string.control_mode_mirror : R.string.control_mode_touch), Toast.LENGTH_SHORT).show();
+    }
+
+    // --- On-screen controller overlay ---
+    // Independent of ControlMode: can be shown alongside either touch or mirror mode.
+
+    private void toggleControllerVisible() {
+        setControllerVisible(!controllerVisible);
+    }
+
+    private void setControllerVisible(boolean visible) {
+        controllerVisible = visible;
+        if (controllerToggleButton != null) {
+            controllerToggleButton.setAlpha(visible ? 1.0f : 0.5f);
+        }
+
+        if (visible) {
             showSecondaryController();
         } else if (secondaryVirtualController != null) {
             secondaryVirtualController.hide();
@@ -589,21 +588,10 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         // Game's own on-screen controller should only be visible on whichever
         // display is actually driving input right now.
         if (Game.instance != null) {
-            Game.instance.setOwnOscHidden(controller);
+            Game.instance.setOwnOscHidden(visible);
         }
 
-        Toast.makeText(this, getControlModeLabel(mode), Toast.LENGTH_SHORT).show();
-    }
-
-    private String getControlModeLabel(ControlMode mode) {
-        switch (mode) {
-            case CONTROLLER:
-                return getString(R.string.control_mode_controller);
-            case MIRROR:
-                return getString(R.string.control_mode_mirror);
-            default:
-                return getString(R.string.control_mode_touch);
-        }
+        Toast.makeText(this, getString(visible ? R.string.controller_overlay_on : R.string.controller_overlay_off), Toast.LENGTH_SHORT).show();
     }
 
     /**
