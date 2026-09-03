@@ -633,8 +633,13 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         SurfaceView sourceView = Game.instance != null ? Game.instance.getStreamSurfaceView() : null;
         int destWidth = mirrorSurfaceView.getWidth();
         int destHeight = mirrorSurfaceView.getHeight();
-        int sourceWidth = prefConfig != null ? prefConfig.width : 0;
-        int sourceHeight = prefConfig != null ? prefConfig.height : 0;
+        // PixelCopy's srcRect is in the source SurfaceView's own displayed pixel
+        // space, which only equals the configured stream resolution (prefConfig)
+        // when video scale mode actually renders it 1:1 (e.g. Fill mode covering
+        // the screen). Using the view's real measured size instead keeps this
+        // correct regardless of scale mode.
+        int sourceWidth = sourceView != null ? sourceView.getWidth() : 0;
+        int sourceHeight = sourceView != null ? sourceView.getHeight() : 0;
 
         if (sourceView == null || destWidth <= 0 || destHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0) {
             handler.postDelayed(mirrorFrameRunnable, MIRROR_FRAME_INTERVAL_MS);
